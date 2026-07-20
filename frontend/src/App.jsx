@@ -53,7 +53,7 @@ export default function App() {
   }, [debouncedKeyword]);
 
   return (
-    <div className="min-h-screen bg-gray-50 text-gray-900 font-sans selection:bg-blue-200">
+    <div className="min-h-screen flex flex-col bg-gray-50 text-gray-900 font-sans selection:bg-blue-200">
       <header className="bg-white border-b sticky top-0 z-10 shadow-sm">
         <div className="max-w-5xl mx-auto px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex flex-col md:flex-row justify-between items-center gap-4">
@@ -206,6 +206,14 @@ export default function App() {
           </div>
         )}
       </main>
+
+      <footer className="bg-white border-t py-8 mt-auto">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+          <p className="text-sm text-gray-500 font-medium">
+            &copy; {new Date().getFullYear()} Dulanja Abeysinghe. All rights reserved.
+          </p>
+        </div>
+      </footer>
     </div>
   );
 }
