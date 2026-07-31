@@ -102,6 +102,7 @@ def parse_job_article(article):
 def get_jobs():
     keywords = request.args.get('keywords', '')
     page = request.args.get('page', '1')
+    sort_param = request.args.get('sort', 'D') # Default to Date (D) instead of Match (M)
     
     # 3-second delay to avoid rate limiting
     time.sleep(3)
@@ -109,7 +110,7 @@ def get_jobs():
     params = {
         "searchstring": keywords,
         "fglo": "1",  # Canadians and international candidates
-        "sort": "M",
+        "sort": sort_param,
         "page": page
     }
     
@@ -145,6 +146,50 @@ def get_jobs():
     except requests.exceptions.RequestException as e:
         print(f"Request failed: {e}")
         return jsonify({"error": "Failed to fetch jobs from Job Bank", "details": str(e)}), 500
+
+@app.route('/api/job-details', methods=['GET'])
+@cache.cached(timeout=3600, query_string=True)
+def get_job_details():
+    url = request.args.get('url')
+    if not url:
+        return jsonify({"error": "URL is required"}), 400
+        
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=10)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        how_to_apply_section = soup.find(id='howtoapply')
+        if not how_to_apply_section:
+            return jsonify({"applyInfo": "Contact info hidden. Click 'Apply' to view."})
+            
+        apply_info = []
+        
+        # Extract email links
+        for a in how_to_apply_section.find_all('a', href=True):
+            if a['href'].startswith('mailto:'):
+                apply_info.append(f"Email: {a['href'].replace('mailto:', '')}")
+                
+        # Look for visible phone/mail details in paragraphs and divs
+        for elem in how_to_apply_section.find_all(['p', 'div', 'li']):
+            text = " ".join(elem.text.split())
+            if text and ("By phone" in text or "By mail" in text or "In person" in text or "@" in text):
+                if "Show how to apply" not in text and "Direct Apply" not in text:
+                    # Clean up things like "By phone 403-123-1234"
+                    apply_info.append(text)
+                    
+        # Remove duplicates while preserving order
+        seen = set()
+        clean_info = [x for x in apply_info if not (x in seen or seen.add(x))]
+        
+        info_string = "\n".join(clean_info) if clean_info else "Contact info hidden by Job Bank security. Click 'Apply' to view."
+        
+        return jsonify({"applyInfo": info_string})
+        
+    except Exception as e:
+        print(f"Error fetching details: {e}")
+        return jsonify({"applyInfo": "Could not load contact info."})
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

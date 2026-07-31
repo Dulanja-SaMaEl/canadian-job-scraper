@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Search, MapPin, Building2, Banknote, Calendar, ExternalLink, Globe2, AlertCircle } from 'lucide-react';
+import { Search, MapPin, Building2, Banknote, Calendar, ExternalLink, Globe2, AlertCircle, CheckCircle, Download, ArrowDownUp, Phone } from 'lucide-react';
 
 // Debounce hook
 function useDebounce(value, delay) {
@@ -17,7 +17,10 @@ export default function App() {
   const [keyword, setKeyword] = useState('');
   const debouncedKeyword = useDebounce(keyword, 500);
   const [page, setPage] = useState(1);
+  const [sort, setSort] = useState('D'); // 'D' for Date, 'M' for Match
   const [jobs, setJobs] = useState([]);
+  const [appliedJobs, setAppliedJobs] = useState(() => JSON.parse(localStorage.getItem('appliedJobs')) || []);
+  const [contactInfo, setContactInfo] = useState({});
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -27,7 +30,7 @@ export default function App() {
     setError(null);
     try {
       const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
-      const response = await fetch(`${apiUrl}/jobs?keywords=${encodeURIComponent(debouncedKeyword)}&page=${page}`);
+      const response = await fetch(`${apiUrl}/jobs?keywords=${encodeURIComponent(debouncedKeyword)}&page=${page}&sort=${sort}`);
       
       if (!response.ok) {
         throw new Error('Failed to fetch jobs');
@@ -41,16 +44,65 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [debouncedKeyword, page]);
+  }, [debouncedKeyword, page, sort]);
 
   useEffect(() => {
     fetchJobs();
   }, [fetchJobs]);
 
-  // Reset page to 1 when keyword changes
+  // Reset page to 1 when keyword or sort changes
   useEffect(() => {
     setPage(1);
-  }, [debouncedKeyword]);
+  }, [debouncedKeyword, sort]);
+
+  const toggleApplied = (job) => {
+    setAppliedJobs(prev => {
+      const isApplied = prev.some(j => j.jobId === job.jobId);
+      let newApplied;
+      if (isApplied) {
+        newApplied = prev.filter(j => j.jobId !== job.jobId);
+      } else {
+        newApplied = [...prev, job];
+      }
+      localStorage.setItem('appliedJobs', JSON.stringify(newApplied));
+      return newApplied;
+    });
+  };
+
+  const exportToCsv = () => {
+    if (appliedJobs.length === 0) return;
+    const headers = ['Title', 'Company', 'Location', 'Salary', 'Date Posted', 'URL'];
+    const csvRows = [
+      headers.join(','),
+      ...appliedJobs.map(job => [
+        `"${(job.title || '').replace(/"/g, '""')}"`,
+        `"${(job.company || '').replace(/"/g, '""')}"`,
+        `"${(job.location || '').replace(/"/g, '""')}"`,
+        `"${(job.salary || '').replace(/"/g, '""')}"`,
+        `"${(job.datePosted || '').replace(/"/g, '""')}"`,
+        `"${job.url}"`
+      ].join(','))
+    ].join('\n');
+    const blob = new Blob([csvRows], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'applied_jobs.csv';
+    a.click();
+  };
+
+  const fetchContactInfo = async (jobId, jobUrl) => {
+    if (contactInfo[jobId]) return;
+    setContactInfo(prev => ({ ...prev, [jobId]: { loading: true } }));
+    try {
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+      const response = await fetch(`${apiUrl}/job-details?url=${encodeURIComponent(jobUrl)}`);
+      const data = await response.json();
+      setContactInfo(prev => ({ ...prev, [jobId]: { loading: false, data: data.applyInfo } }));
+    } catch (err) {
+      setContactInfo(prev => ({ ...prev, [jobId]: { loading: false, data: 'Failed to load info.' } }));
+    }
+  };
 
   return (
     <div className="min-h-screen flex flex-col bg-gray-50 text-gray-900 font-sans selection:bg-blue-200">
@@ -79,6 +131,31 @@ export default function App() {
                 onChange={(e) => setKeyword(e.target.value)}
               />
             </div>
+          </div>
+
+          {/* Tools Bar (Sort & Export) */}
+          <div className="flex flex-col sm:flex-row justify-between items-center gap-4 mt-4 pt-4 border-t border-gray-100">
+            <div className="flex items-center gap-2 text-sm">
+              <ArrowDownUp className="w-4 h-4 text-gray-500" />
+              <span className="text-gray-600 font-medium">Sort by:</span>
+              <select 
+                value={sort} 
+                onChange={(e) => setSort(e.target.value)}
+                className="bg-transparent border-none text-blue-600 font-semibold focus:ring-0 cursor-pointer p-0"
+              >
+                <option value="D">Date Posted (Latest First)</option>
+                <option value="M">Best Match</option>
+              </select>
+            </div>
+            
+            <button 
+              onClick={exportToCsv}
+              disabled={appliedJobs.length === 0}
+              className="flex items-center gap-2 px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              <Download className="w-4 h-4" />
+              Export Applied ({appliedJobs.length})
+            </button>
           </div>
         </div>
       </header>
@@ -163,18 +240,57 @@ export default function App() {
                         <span>{job.datePosted}</span>
                       </div>
                     </div>
+                    
+                    {/* Contact Info Section */}
+                    {contactInfo[job.jobId] && !contactInfo[job.jobId].loading && (
+                      <div className="mt-3 p-3 bg-blue-50/50 rounded-lg border border-blue-100/50">
+                        <p className="text-sm font-medium text-blue-900 whitespace-pre-wrap">
+                          {contactInfo[job.jobId].data}
+                        </p>
+                      </div>
+                    )}
                   </div>
                   
-                  <div className="flex items-center sm:items-start pt-2 sm:pt-0">
-                    <a 
-                      href={job.url} 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      className="w-full sm:w-auto inline-flex justify-center items-center gap-2 px-6 py-2.5 bg-blue-600 text-white font-medium rounded-xl hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors active:scale-95"
-                    >
-                      Apply
-                      <ExternalLink className="w-4 h-4" />
-                    </a>
+                  <div className="flex flex-col sm:items-end gap-3 pt-4 sm:pt-0 min-w-[120px]">
+                    <div className="flex gap-2 w-full sm:w-auto">
+                      <button
+                        onClick={() => fetchContactInfo(job.jobId, job.url)}
+                        disabled={contactInfo[job.jobId]?.loading}
+                        className="flex-1 sm:flex-none inline-flex justify-center items-center gap-2 px-4 py-2.5 bg-white border border-gray-300 text-gray-700 font-medium rounded-xl hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 transition-colors active:scale-95 disabled:opacity-50"
+                        title="Reveal Phone / Email"
+                      >
+                        {contactInfo[job.jobId]?.loading ? (
+                          <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></div>
+                        ) : (
+                          <Phone className="w-4 h-4" />
+                        )}
+                      </button>
+                      
+                      <a 
+                        href={job.url} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="flex-1 sm:flex-none inline-flex justify-center items-center gap-2 px-6 py-2.5 bg-blue-600 text-white font-medium rounded-xl hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors active:scale-95"
+                      >
+                        Apply
+                        <ExternalLink className="w-4 h-4" />
+                      </a>
+                    </div>
+                    
+                    <label className="flex items-center gap-2 cursor-pointer group/label">
+                      <div className={`relative flex items-center justify-center w-5 h-5 rounded border transition-colors ${appliedJobs.some(j => j.jobId === job.jobId) ? 'bg-green-500 border-green-500' : 'border-gray-300 group-hover/label:border-green-500'}`}>
+                        <input 
+                          type="checkbox" 
+                          className="absolute opacity-0 w-full h-full cursor-pointer" 
+                          checked={appliedJobs.some(j => j.jobId === job.jobId)}
+                          onChange={() => toggleApplied(job)}
+                        />
+                        {appliedJobs.some(j => j.jobId === job.jobId) && <CheckCircle className="w-3.5 h-3.5 text-white" />}
+                      </div>
+                      <span className={`text-sm font-medium select-none ${appliedJobs.some(j => j.jobId === job.jobId) ? 'text-green-600' : 'text-gray-500 group-hover/label:text-gray-700'}`}>
+                        {appliedJobs.some(j => j.jobId === job.jobId) ? 'Applied' : 'Mark Applied'}
+                      </span>
+                    </label>
                   </div>
                 </div>
               </div>
