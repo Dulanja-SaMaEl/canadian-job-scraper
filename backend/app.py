@@ -198,12 +198,15 @@ def get_job_details():
         apply_info = []
 
         # First: grab all mailto links anywhere on the page (highest priority)
+        # Skip template links like mailto:?Subject=... which have no actual email
         for a in soup.find_all('a', href=True):
-            if a['href'].startswith('mailto:'):
-                email = a['href'].replace('mailto:', '').strip()
-                entry = f"📧 Email: {email}"
-                if entry not in apply_info:
-                    apply_info.append(entry)
+            href = a['href']
+            if href.startswith('mailto:') and not href.startswith('mailto:?'):
+                email = href.replace('mailto:', '').split('?')[0].strip()
+                if email and '@' in email:
+                    entry = f"📧 Email: {email}"
+                    if entry not in apply_info:
+                        apply_info.append(entry)
 
         # Find the how-to-apply section for phone/address/fax
         how_to_apply_section = soup.find(id='howtoapply')
