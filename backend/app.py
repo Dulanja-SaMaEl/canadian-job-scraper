@@ -57,7 +57,7 @@ def parse_job_article(article):
             for hidden in location_elem.find_all("span", class_="wb-inv"):
                 hidden.decompose()
             location = " ".join(location_elem.text.split())
-            
+
         # Salary
         salary = "Not listed"
         salary_elem = article.select_one(".salary, .pay")
@@ -65,19 +65,18 @@ def parse_job_article(article):
             for hidden in salary_elem.find_all("span", class_="wb-inv"):
                 hidden.decompose()
             salary = " ".join(salary_elem.text.split()).replace("Salary ", "").replace("Salary", "")
-            
+
         # Date posted
         date_posted = "Unknown Date"
         date_elem = article.select_one(".date, .date-posted")
         if date_elem:
             date_posted = date_elem.text.strip()
-            
+
         # Extract flags (like New, On site, Direct Apply)
         flags = []
         flag_container = article.select_one(".flag")
         if flag_container:
             for span in flag_container.find_all("span", recursive=False):
-                # Ignore description spans inside
                 for desc in span.find_all("span", class_="description"):
                     desc.decompose()
                 flag_text = span.text.strip()
@@ -103,50 +102,47 @@ def parse_job_article(article):
 def get_jobs():
     keywords = request.args.get('keywords', '')
     page = request.args.get('page', '1')
-    sort_param = request.args.get('sort', 'D') # Default to Date (D) instead of Match (M)
-    
+    sort_param = request.args.get('sort', 'D')  # Default to Date (D)
+
     # 3-second delay to avoid rate limiting
     time.sleep(3)
-    
+
     params = {
         "searchstring": keywords,
         "fglo": "1",  # Canadians and international candidates
         "sort": sort_param,
         "page": page
     }
-    
+
     try:
         response = requests.get(BASE_URL, params=params, headers=HEADERS, timeout=10)
         response.raise_for_status()
-        
+
         soup = BeautifulSoup(response.text, 'html.parser')
-        
+
         jobs = []
-        # Find all job articles
         articles = soup.find_all('article')
         if not articles:
-            # Fallback to divs with result class
             articles = soup.select('div[class*="result"]')
-            
+
         for article in articles:
             job_data = parse_job_article(article)
             if job_data:
                 jobs.append(job_data)
-                
-        # Basic pagination estimation (Job Bank often doesn't give a clear total pages easy to parse,
-        # but we can check if a "Next" button exists or if we got results)
+
         total_pages = int(page) + 1 if len(jobs) > 0 else int(page)
-        
+
         return jsonify({
             "jobs": jobs,
             "totalPages": total_pages,
             "currentPage": int(page),
             "keyword": keywords
         })
-        
+
     except requests.exceptions.RequestException as e:
         print(f"Request failed: {e}")
         return jsonify({"error": "Failed to fetch jobs from Job Bank", "details": str(e)}), 500
+
 
 @app.route('/api/job-details', methods=['GET'])
 @cache.cached(timeout=3600, query_string=True)
@@ -156,20 +152,43 @@ def get_job_details():
         return jsonify({"error": "URL is required"}), 400
 
     try:
-        response = requests.get(url, headers=HEADERS, timeout=15)
-        response.raise_for_status()
-        raw_html = response.text
-        soup = BeautifulSoup(raw_html, 'html.parser')
+        # Retry with increasing timeouts
+        response = None
+        for timeout in [20, 35]:
+            try:
+                response = requests.get(url, headers=HEADERS, timeout=timeout)
+                response.raise_for_status()
+                break
+            except requests.exceptions.Timeout:
+                if timeout == 35:
+                    return jsonify({"applyInfo": "⏱ Job Bank took too long to respond. Click 'Apply' to visit the job page directly."})
+                time.sleep(2)
+
+        soup = BeautifulSoup(response.text, 'html.parser')
 
         apply_info = []
         seen = set()
 
         def add(entry):
-            if entry and entry not in seen:
+            entry = entry.strip()
+            if entry and entry not in seen and len(entry) > 5:
                 seen.add(entry)
                 apply_info.append(entry)
 
-        # ── 1. Real mailto: links (skip template ones like mailto:?Subject=)
+        # Use get_text() so HTML entities like &#64; are decoded to @
+        all_text = soup.get_text(separator=' ')
+
+        # 1. Find emails in decoded text
+        blocked_domains = {
+            'jobbank.gc.ca', 'canada.ca', 'gc.ca', 'sentry.io',
+            'w3.org', 'example.com', 'yourdomain.com', 'forces.ca'
+        }
+        for email in re.findall(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,4}', all_text):
+            domain = email.split('@')[-1].lower()
+            if domain not in blocked_domains and not any(email.endswith(x) for x in ['.png', '.jpg', '.gif', '.svg']):
+                add(f"📧 Email: {email}")
+
+        # 2. Also scan raw mailto: hrefs (catches obfuscated links)
         for a in soup.find_all('a', href=True):
             href = a['href']
             if href.startswith('mailto:') and not href.startswith('mailto:?'):
@@ -177,43 +196,17 @@ def get_job_details():
                 if email and '@' in email and '.' in email:
                     add(f"📧 Email: {email}")
 
-        # ── 2. Regex sweep on raw HTML for emails (catches ones inside hidden/collapsed divs)
-        raw_emails = re.findall(
-            r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}',
-            raw_html
-        )
-        # Blocklist — Job Bank's own domains and image/asset paths
-        blocked = {'jobbank.gc.ca', 'canada.ca', 'gc.ca', 'sentry.io',
-                   'example.com', 'domain.com', 'email.com'}
-        for email in raw_emails:
-            domain = email.split('@')[-1].lower()
-            if domain not in blocked and not email.endswith(('.png', '.jpg', '.gif', '.svg')):
-                add(f"📧 Email: {email}")
+        # 3. Find Canadian phone numbers in decoded text
+        for phone in re.findall(r'\(?\d{3}\)?[\s\-\.]\d{3}[\s\-\.]\d{4}(?!\d)', all_text):
+            phone = re.sub(r'\s+', ' ', phone).strip()
+            add(f"📞 Phone: {phone}")
 
-        # ── 3. Regex sweep for Canadian phone numbers in raw HTML
-        phone_pattern = re.compile(
-            r'(?<![\d\-])'          # no digit/dash before
-            r'(\+?1[\s\-.]?)?'      # optional country code
-            r'\(?\d{3}\)?'          # area code
-            r'[\s\-.]'              # separator
-            r'\d{3}'                # first 3 digits
-            r'[\s\-.]'              # separator
-            r'\d{4}'                # last 4 digits
-            r'(?![\d])'             # no digit after
-        )
-        phones_found = set()
-        for match in phone_pattern.finditer(raw_html):
-            phone = re.sub(r'\s+', ' ', match.group()).strip()
-            if phone not in phones_found:
-                phones_found.add(phone)
-                add(f"📞 Phone: {phone}")
-
-        # ── 4. Structured 'How to apply' section (By mail / In person / By fax)
+        # 4. Look for "By mail", "In person", "By fax" address blocks
         how_to_apply_section = soup.find(id='howtoapply')
         if not how_to_apply_section:
-            # Search for any collapsed accordion/div that mentions 'how to apply'
             for tag in soup.find_all(True):
-                if tag.get('id') and 'apply' in tag.get('id', '').lower():
+                tag_id = tag.get('id', '')
+                if tag_id and 'apply' in tag_id.lower():
                     how_to_apply_section = tag
                     break
 
@@ -221,27 +214,26 @@ def get_job_details():
             for elem in how_to_apply_section.find_all(True):
                 text = " ".join(elem.get_text(separator=' ').split())
                 for keyword, icon in [
-                    ("By mail", "📬"),
-                    ("In person", "📬"),
-                    ("By fax", "📠"),
-                    ("By phone", "📞"),
-                    ("By email", "📧"),
+                    ("By mail", "📬"), ("In person", "📬"),
+                    ("By fax", "📠"), ("By phone", "📞"), ("By email", "📧"),
                 ]:
-                    if keyword in text and len(text) < 300:
-                        filtered = text
-                        if "Show how to apply" not in filtered and "jobbank" not in filtered.lower():
-                            add(f"{icon} {filtered}")
+                    if keyword in text and 5 < len(text) < 300:
+                        if "Show how to apply" not in text and "jobbank" not in text.lower():
+                            add(f"{icon} {text}")
 
         if not apply_info:
-            info_string = "ℹ️ No contact info found on this job page. Job Bank may require a login to reveal the employer's details. Click 'Apply' to visit the page directly."
+            info_string = "ℹ️ Contact info is hidden on this job. Click the blue 'Apply' button, then click the green 'Show how to apply' button on Job Bank to reveal it."
         else:
             info_string = "\n".join(apply_info)
 
         return jsonify({"applyInfo": info_string})
 
+    except requests.exceptions.Timeout:
+        return jsonify({"applyInfo": "⏱ Job Bank took too long to respond. Click 'Apply' to visit the job page directly."})
     except Exception as e:
         print(f"Error fetching job details: {e}")
-        return jsonify({"applyInfo": f"Could not load contact info: {str(e)})"})
+        return jsonify({"applyInfo": "Could not load contact info. Click 'Apply' to visit the job page."})
+
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
