@@ -1,4 +1,5 @@
 import time
+import re
 import requests
 from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify
@@ -153,92 +154,94 @@ def get_job_details():
     url = request.args.get('url')
     if not url:
         return jsonify({"error": "URL is required"}), 400
-        
+
     try:
-        # Use a session so cookies (jsessionid) are automatically carried over
-        session = requests.Session()
+        response = requests.get(url, headers=HEADERS, timeout=15)
+        response.raise_for_status()
+        raw_html = response.text
+        soup = BeautifulSoup(raw_html, 'html.parser')
 
-        # Step 1: GET the job page to acquire the session cookie + form fields
-        get_response = session.get(url, headers=HEADERS, timeout=15)
-        get_response.raise_for_status()
-
-        soup = BeautifulSoup(get_response.text, 'html.parser')
-
-        # Step 2: Find the hidden "seekeractivity" form and extract all its fields
-        apply_form = soup.find('form', id='seekeractivity')
-
-        if apply_form:
-            form_data = {}
-            for inp in apply_form.find_all('input', type='hidden'):
-                if inp.get('name'):
-                    form_data[inp['name']] = inp.get('value', '')
-
-            # The action URL contains the jsessionid token
-            form_action = apply_form.get('action', '')
-            if form_action.startswith('/'):
-                post_url = BASE_DOMAIN + form_action
-            else:
-                post_url = form_action
-
-            post_headers = {**HEADERS,
-                "Referer": url,
-                "Content-Type": "application/x-www-form-urlencoded",
-                "X-Requested-With": "XMLHttpRequest",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Origin": BASE_DOMAIN,
-            }
-
-            # Step 3: POST the form — this mimics clicking "Show how to apply"
-            post_response = session.post(post_url, data=form_data, headers=post_headers, timeout=15)
-
-            if post_response.ok and len(post_response.text) > 100:
-                soup = BeautifulSoup(post_response.text, 'html.parser')
-
-        # Step 4: Parse the (now updated) page for all contact info
         apply_info = []
+        seen = set()
 
-        # First: grab all mailto links anywhere on the page (highest priority)
-        # Skip template links like mailto:?Subject=... which have no actual email
+        def add(entry):
+            if entry and entry not in seen:
+                seen.add(entry)
+                apply_info.append(entry)
+
+        # ── 1. Real mailto: links (skip template ones like mailto:?Subject=)
         for a in soup.find_all('a', href=True):
             href = a['href']
             if href.startswith('mailto:') and not href.startswith('mailto:?'):
                 email = href.replace('mailto:', '').split('?')[0].strip()
-                if email and '@' in email:
-                    entry = f"📧 Email: {email}"
-                    if entry not in apply_info:
-                        apply_info.append(entry)
+                if email and '@' in email and '.' in email:
+                    add(f"📧 Email: {email}")
 
-        # Find the how-to-apply section for phone/address/fax
+        # ── 2. Regex sweep on raw HTML for emails (catches ones inside hidden/collapsed divs)
+        raw_emails = re.findall(
+            r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}',
+            raw_html
+        )
+        # Blocklist — Job Bank's own domains and image/asset paths
+        blocked = {'jobbank.gc.ca', 'canada.ca', 'gc.ca', 'sentry.io',
+                   'example.com', 'domain.com', 'email.com'}
+        for email in raw_emails:
+            domain = email.split('@')[-1].lower()
+            if domain not in blocked and not email.endswith(('.png', '.jpg', '.gif', '.svg')):
+                add(f"📧 Email: {email}")
+
+        # ── 3. Regex sweep for Canadian phone numbers in raw HTML
+        phone_pattern = re.compile(
+            r'(?<![\d\-])'          # no digit/dash before
+            r'(\+?1[\s\-.]?)?'      # optional country code
+            r'\(?\d{3}\)?'          # area code
+            r'[\s\-.]'              # separator
+            r'\d{3}'                # first 3 digits
+            r'[\s\-.]'              # separator
+            r'\d{4}'                # last 4 digits
+            r'(?![\d])'             # no digit after
+        )
+        phones_found = set()
+        for match in phone_pattern.finditer(raw_html):
+            phone = re.sub(r'\s+', ' ', match.group()).strip()
+            if phone not in phones_found:
+                phones_found.add(phone)
+                add(f"📞 Phone: {phone}")
+
+        # ── 4. Structured 'How to apply' section (By mail / In person / By fax)
         how_to_apply_section = soup.find(id='howtoapply')
         if not how_to_apply_section:
-            for h in soup.find_all(['h2', 'h3', 'h4']):
-                if h.text and "how to apply" in h.text.lower():
-                    how_to_apply_section = h.find_parent(['section', 'div', 'article'])
+            # Search for any collapsed accordion/div that mentions 'how to apply'
+            for tag in soup.find_all(True):
+                if tag.get('id') and 'apply' in tag.get('id', '').lower():
+                    how_to_apply_section = tag
                     break
 
         if how_to_apply_section:
-            for elem in how_to_apply_section.find_all(['p', 'div', 'li']):
+            for elem in how_to_apply_section.find_all(True):
                 text = " ".join(elem.get_text(separator=' ').split())
-                has_contact = any(k in text for k in ["By phone", "By mail", "In person", "By fax", "By email"])
-                if has_contact and "Show how to apply" not in text and "jobbank" not in text.lower() and len(text) > 5:
-                    if "By phone" in text:
-                        text = "📞 " + text
-                    elif "By mail" in text or "In person" in text:
-                        text = "📬 " + text
-                    elif "By fax" in text:
-                        text = "📠 " + text
-                    elif "By email" in text:
-                        text = "📧 " + text
-                    if text not in apply_info:
-                        apply_info.append(text)
+                for keyword, icon in [
+                    ("By mail", "📬"),
+                    ("In person", "📬"),
+                    ("By fax", "📠"),
+                    ("By phone", "📞"),
+                    ("By email", "📧"),
+                ]:
+                    if keyword in text and len(text) < 300:
+                        filtered = text
+                        if "Show how to apply" not in filtered and "jobbank" not in filtered.lower():
+                            add(f"{icon} {filtered}")
 
-        info_string = "\n".join(apply_info) if apply_info else "Contact info hidden. Job Bank requires login to reveal this employer's contact details."
+        if not apply_info:
+            info_string = "ℹ️ No contact info found on this job page. Job Bank may require a login to reveal the employer's details. Click 'Apply' to visit the page directly."
+        else:
+            info_string = "\n".join(apply_info)
 
         return jsonify({"applyInfo": info_string})
 
     except Exception as e:
-        print(f"Error fetching details: {e}")
-        return jsonify({"applyInfo": f"Could not load contact info: {str(e)}"})
+        print(f"Error fetching job details: {e}")
+        return jsonify({"applyInfo": f"Could not load contact info: {str(e)})"})
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
