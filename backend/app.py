@@ -160,7 +160,14 @@ def get_job_details():
         
         soup = BeautifulSoup(response.text, 'html.parser')
         
+        # Try to find the section by ID or by Header text
         how_to_apply_section = soup.find(id='howtoapply')
+        if not how_to_apply_section:
+            for h in soup.find_all(['h2', 'h3', 'h4', 'span', 'p']):
+                if h.text and "how to apply" in h.text.lower():
+                    how_to_apply_section = h.parent
+                    break
+
         if not how_to_apply_section:
             return jsonify({"applyInfo": "Contact info hidden. Click 'Apply' to view."})
             
@@ -171,17 +178,22 @@ def get_job_details():
             if a['href'].startswith('mailto:'):
                 apply_info.append(f"Email: {a['href'].replace('mailto:', '')}")
                 
-        # Look for visible phone/mail details in paragraphs and divs
+        # Look for visible phone/mail details in paragraphs, divs, and list items
+        # Sometimes it's structured like <p><strong>By email</strong><br>email@domain.com</p>
         for elem in how_to_apply_section.find_all(['p', 'div', 'li']):
-            text = " ".join(elem.text.split())
-            if text and ("By phone" in text or "By mail" in text or "In person" in text or "@" in text):
-                if "Show how to apply" not in text and "Direct Apply" not in text:
-                    # Clean up things like "By phone 403-123-1234"
+            # get_text with separator to replace <br> with space
+            text = " ".join(elem.get_text(separator=' ').split())
+            if text and ("By phone" in text or "By mail" in text or "In person" in text or "By fax" in text or "By email" in text or "@" in text):
+                if "Show how to apply" not in text and "Direct Apply" not in text and "jobbank" not in text.lower():
                     apply_info.append(text)
                     
         # Remove duplicates while preserving order
         seen = set()
-        clean_info = [x for x in apply_info if not (x in seen or seen.add(x))]
+        clean_info = []
+        for x in apply_info:
+            if x not in seen and len(x) > 5:
+                clean_info.append(x)
+                seen.add(x)
         
         info_string = "\n".join(clean_info) if clean_info else "Contact info hidden by Job Bank security. Click 'Apply' to view."
         
