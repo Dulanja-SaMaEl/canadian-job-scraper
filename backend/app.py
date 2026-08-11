@@ -231,24 +231,39 @@ def get_job_details():
         # 2. If no info found, attempt POST form submission to reveal contact info
         if not apply_info:
             soup = BeautifulSoup(response.text, 'html.parser')
-            form = soup.find('form', id='seekeractivity')
             job_id_match = re.search(r'/jobposting/(\d+)', url)
             job_id = job_id_match.group(1) if job_id_match else None
             
-            if form or job_id:
+            if job_id:
                 vs_inp = soup.find('input', {'name': 'jakarta.faces.ViewState'}) if soup else None
                 viewstate = vs_inp.get('value', 'stateless') if vs_inp else 'stateless'
-                actual_job_id = job_id or (soup.find('input', {'id': 'seekeractivity:jobid'}).get('value') if soup.find('input', {'id': 'seekeractivity:jobid'}) else '')
-
+                
+                # Exact Jakarta EE JSF AJAX payload
                 post_data = {
-                    'seekeractivity': 'seekeractivity',
-                    'seekeractivity:jobid': actual_job_id,
+                    'seekeractivity:jobid': job_id,
                     'seekeractivity_SUBMIT': '1',
-                    'jakarta.faces.ViewState': viewstate
+                    'jakarta.faces.ViewState': viewstate,
+                    'jakarta.faces.behavior.event': 'action',
+                    'action': 'applynowbutton',
+                    'jakarta.faces.partial.event': 'click',
+                    'jakarta.faces.source': 'seekeractivity',
+                    'jakarta.faces.partial.ajax': 'true',
+                    'jakarta.faces.partial.execute': 'jobid',
+                    'jakarta.faces.partial.render': 'applynow markappliedgroup',
+                    'seekeractivity': 'seekeractivity'
+                }
+                
+                post_headers = {
+                    "User-Agent": HEADERS["User-Agent"],
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Faces-Request": "partial/ajax",
+                    "X-Requested-With": "XMLHttpRequest",
+                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                    "Referer": url
                 }
                 
                 try:
-                    post_headers = {**HEADERS, 'Referer': url}
                     post_res = session.post(url, data=post_data, headers=post_headers, timeout=20)
                     if post_res.status_code == 200:
                         apply_info = extract_contact_info(post_res.text)
