@@ -152,11 +152,13 @@ def get_job_details():
         return jsonify({"error": "URL is required"}), 400
 
     try:
-        # Retry with increasing timeouts
+        session = requests.Session()
+        
+        # 1. GET initial page
         response = None
         for timeout in [20, 35]:
             try:
-                response = requests.get(url, headers=HEADERS, timeout=timeout)
+                response = session.get(url, headers=HEADERS, timeout=timeout)
                 response.raise_for_status()
                 break
             except requests.exceptions.Timeout:
@@ -164,62 +166,94 @@ def get_job_details():
                     return jsonify({"applyInfo": "⏱ Job Bank took too long to respond. Click 'Apply' to visit the job page directly."})
                 time.sleep(2)
 
-        soup = BeautifulSoup(response.text, 'html.parser')
+        def extract_contact_info(html_content):
+            soup = BeautifulSoup(html_content, 'html.parser')
+            apply_info = []
+            seen = set()
 
-        apply_info = []
-        seen = set()
+            def add(entry):
+                entry = entry.strip()
+                if entry and entry not in seen and len(entry) > 5:
+                    seen.add(entry)
+                    apply_info.append(entry)
 
-        def add(entry):
-            entry = entry.strip()
-            if entry and entry not in seen and len(entry) > 5:
-                seen.add(entry)
-                apply_info.append(entry)
+            # Use get_text() so HTML entities like &#64; are decoded to @
+            all_text = soup.get_text(separator=' ')
 
-        # Use get_text() so HTML entities like &#64; are decoded to @
-        all_text = soup.get_text(separator=' ')
-
-        # 1. Find emails in decoded text
-        blocked_domains = {
-            'jobbank.gc.ca', 'canada.ca', 'gc.ca', 'sentry.io',
-            'w3.org', 'example.com', 'yourdomain.com', 'forces.ca'
-        }
-        for email in re.findall(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,4}', all_text):
-            domain = email.split('@')[-1].lower()
-            if domain not in blocked_domains and not any(email.endswith(x) for x in ['.png', '.jpg', '.gif', '.svg']):
-                add(f"📧 Email: {email}")
-
-        # 2. Also scan raw mailto: hrefs (catches obfuscated links)
-        for a in soup.find_all('a', href=True):
-            href = a['href']
-            if href.startswith('mailto:') and not href.startswith('mailto:?'):
-                email = href.replace('mailto:', '').split('?')[0].strip()
-                if email and '@' in email and '.' in email:
+            # 1. Find emails in decoded text
+            blocked_domains = {
+                'jobbank.gc.ca', 'canada.ca', 'gc.ca', 'sentry.io',
+                'w3.org', 'example.com', 'yourdomain.com', 'forces.ca'
+            }
+            for email in re.findall(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,4}', all_text):
+                domain = email.split('@')[-1].lower()
+                if domain not in blocked_domains and not any(email.endswith(x) for x in ['.png', '.jpg', '.gif', '.svg']):
                     add(f"📧 Email: {email}")
 
-        # 3. Find Canadian phone numbers in decoded text
-        for phone in re.findall(r'\(?\d{3}\)?[\s\-\.]\d{3}[\s\-\.]\d{4}(?!\d)', all_text):
-            phone = re.sub(r'\s+', ' ', phone).strip()
-            add(f"📞 Phone: {phone}")
+            # 2. Also scan raw mailto: hrefs (catches obfuscated links)
+            for a in soup.find_all('a', href=True):
+                href = a['href']
+                if href.startswith('mailto:') and not href.startswith('mailto:?'):
+                    email = href.replace('mailto:', '').split('?')[0].strip()
+                    if email and '@' in email and '.' in email:
+                        add(f"📧 Email: {email}")
 
-        # 4. Look for "By mail", "In person", "By fax" address blocks
-        how_to_apply_section = soup.find(id='howtoapply')
-        if not how_to_apply_section:
-            for tag in soup.find_all(True):
-                tag_id = tag.get('id', '')
-                if tag_id and 'apply' in tag_id.lower():
-                    how_to_apply_section = tag
-                    break
+            # 3. Find Canadian phone numbers in decoded text
+            for phone in re.findall(r'\(?\d{3}\)?[\s\-\.]\d{3}[\s\-\.]\d{4}(?!\d)', all_text):
+                phone = re.sub(r'\s+', ' ', phone).strip()
+                add(f"📞 Phone: {phone}")
 
-        if how_to_apply_section:
-            for elem in how_to_apply_section.find_all(True):
-                text = " ".join(elem.get_text(separator=' ').split())
-                for keyword, icon in [
-                    ("By mail", "📬"), ("In person", "📬"),
-                    ("By fax", "📠"), ("By phone", "📞"), ("By email", "📧"),
-                ]:
-                    if keyword in text and 5 < len(text) < 300:
-                        if "Show how to apply" not in text and "jobbank" not in text.lower():
-                            add(f"{icon} {text}")
+            # 4. Look for "By mail", "In person", "By fax" address blocks
+            how_to_apply_section = soup.find(id='howtoapply')
+            if not how_to_apply_section:
+                for tag in soup.find_all(True):
+                    tag_id = tag.get('id', '')
+                    if tag_id and 'apply' in tag_id.lower():
+                        how_to_apply_section = tag
+                        break
+
+            if how_to_apply_section:
+                for elem in how_to_apply_section.find_all(True):
+                    text = " ".join(elem.get_text(separator=' ').split())
+                    for keyword, icon in [
+                        ("By mail", "📬"), ("In person", "📬"),
+                        ("By fax", "📠"), ("By phone", "📞"), ("By email", "📧"),
+                    ]:
+                        if keyword in text and 5 < len(text) < 300:
+                            if "Show how to apply" not in text and "jobbank" not in text.lower():
+                                add(f"{icon} {text}")
+
+            return apply_info
+
+        # Try extraction from initial GET
+        apply_info = extract_contact_info(response.text)
+
+        # 2. If no info found, attempt POST form submission to reveal contact info
+        if not apply_info:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            form = soup.find('form', id='seekeractivity')
+            job_id_match = re.search(r'/jobposting/(\d+)', url)
+            job_id = job_id_match.group(1) if job_id_match else None
+            
+            if form or job_id:
+                vs_inp = soup.find('input', {'name': 'jakarta.faces.ViewState'}) if soup else None
+                viewstate = vs_inp.get('value', 'stateless') if vs_inp else 'stateless'
+                actual_job_id = job_id or (soup.find('input', {'id': 'seekeractivity:jobid'}).get('value') if soup.find('input', {'id': 'seekeractivity:jobid'}) else '')
+
+                post_data = {
+                    'seekeractivity': 'seekeractivity',
+                    'seekeractivity:jobid': actual_job_id,
+                    'seekeractivity_SUBMIT': '1',
+                    'jakarta.faces.ViewState': viewstate
+                }
+                
+                try:
+                    post_headers = {**HEADERS, 'Referer': url}
+                    post_res = session.post(url, data=post_data, headers=post_headers, timeout=20)
+                    if post_res.status_code == 200:
+                        apply_info = extract_contact_info(post_res.text)
+                except Exception as post_err:
+                    print(f"POST reveal attempt failed: {post_err}")
 
         if not apply_info:
             info_string = "ℹ️ Contact info is hidden on this job. Click the blue 'Apply' button, then click the green 'Show how to apply' button on Job Bank to reveal it."
