@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   Search, MapPin, Building2, Banknote, Calendar, ExternalLink, Globe2, 
   AlertCircle, CheckCircle, Download, ArrowDownUp, Phone, X, RefreshCw, 
-  Briefcase, ChevronLeft, ChevronRight, Laptop, Sparkles 
+  Briefcase, ChevronLeft, ChevronRight, Laptop, Sparkles, Check, Ban, Tag, 
+  Edit3, CalendarDays 
 } from 'lucide-react';
 
 const CANADIAN_PROVINCES = [
@@ -59,13 +60,44 @@ export default function App() {
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [appliedJobs, setAppliedJobs] = useState(() => {
+
+  // Tracked jobs with 3 statuses: 'applied', 'checked', 'not_required'
+  const [trackedJobs, setTrackedJobs] = useState(() => {
     try {
-      return JSON.parse(localStorage.getItem('appliedJobs')) || [];
+      const stored = JSON.parse(localStorage.getItem('trackedJobs'));
+      if (stored && Array.isArray(stored)) {
+        return stored;
+      }
+      // Backward compatibility migration from legacy appliedJobs
+      const legacyApplied = JSON.parse(localStorage.getItem('appliedJobs'));
+      if (legacyApplied && Array.isArray(legacyApplied)) {
+        const todayStr = new Date().toISOString().split('T')[0];
+        const migrated = legacyApplied.map(item => ({
+          ...item,
+          status: 'applied',
+          userCode: item.userCode || '',
+          statusDate: item.statusDate || todayStr,
+          updatedAt: item.updatedAt || new Date().toISOString()
+        }));
+        localStorage.setItem('trackedJobs', JSON.stringify(migrated));
+        return migrated;
+      }
+      return [];
     } catch {
       return [];
     }
   });
+
+  // Modal state for marking applied and inputting user code
+  const [appliedModalJob, setAppliedModalJob] = useState(null);
+  const [modalUserCode, setModalUserCode] = useState('');
+  const [modalStatusDate, setModalStatusDate] = useState(() => new Date().toISOString().split('T')[0]);
+
+  // Date range & status filter for Export
+  const [exportStartDate, setExportStartDate] = useState('');
+  const [exportEndDate, setExportEndDate] = useState('');
+  const [exportStatusFilter, setExportStatusFilter] = useState('all'); // 'all', 'applied', 'checked', 'not_required'
+
   const [contactInfo, setContactInfo] = useState({});
 
   // Ref to cancel pending requests
@@ -151,31 +183,129 @@ export default function App() {
     };
   }, [fetchJobs]);
 
-  const toggleApplied = (job) => {
-    setAppliedJobs(prev => {
-      const isApplied = prev.some(j => j.jobId === job.jobId);
-      let newApplied;
-      if (isApplied) {
-        newApplied = prev.filter(j => j.jobId !== job.jobId);
+  // Status counts for applied, checked, and not_required
+  const statusCounts = {
+    applied: trackedJobs.filter(j => j.status === 'applied').length,
+    checked: trackedJobs.filter(j => j.status === 'checked').length,
+    notRequired: trackedJobs.filter(j => j.status === 'not_required').length,
+    total: trackedJobs.length
+  };
+
+  // Helper to get tracked job item
+  const getTrackedJob = (jobId) => {
+    return trackedJobs.find(j => j.jobId === jobId);
+  };
+
+  // Set or toggle status for a job
+  const updateJobStatus = (job, newStatus, userCode = '', statusDate = '') => {
+    setTrackedJobs(prev => {
+      const existing = prev.find(j => j.jobId === job.jobId);
+      const todayStr = new Date().toISOString().split('T')[0];
+      let updated;
+
+      // If clicking the same status that's already active (without new code/date update), toggle it off
+      if (existing && existing.status === newStatus && !userCode) {
+        updated = prev.filter(j => j.jobId !== job.jobId);
+      } else if (existing) {
+        updated = prev.map(j => {
+          if (j.jobId !== job.jobId) return j;
+          return {
+            ...j,
+            ...job,
+            status: newStatus,
+            userCode: userCode !== '' ? userCode : j.userCode || '',
+            statusDate: statusDate || j.statusDate || todayStr,
+            updatedAt: new Date().toISOString()
+          };
+        });
       } else {
-        newApplied = [...prev, job];
+        updated = [
+          ...prev,
+          {
+            ...job,
+            status: newStatus,
+            userCode: userCode || '',
+            statusDate: statusDate || todayStr,
+            updatedAt: new Date().toISOString()
+          }
+        ];
       }
-      localStorage.setItem('appliedJobs', JSON.stringify(newApplied));
-      return newApplied;
+
+      localStorage.setItem('trackedJobs', JSON.stringify(updated));
+      localStorage.setItem('appliedJobs', JSON.stringify(updated.filter(j => j.status === 'applied')));
+      return updated;
     });
   };
 
+  // Open the applied modal with existing code & date
+  const openAppliedModal = (job) => {
+    const existing = getTrackedJob(job.jobId);
+    const todayStr = new Date().toISOString().split('T')[0];
+    setAppliedModalJob(job);
+    setModalUserCode(existing?.userCode || '');
+    setModalStatusDate(existing?.statusDate || todayStr);
+  };
+
+  const closeAppliedModal = () => {
+    setAppliedModalJob(null);
+    setModalUserCode('');
+  };
+
+  const handleSaveAppliedModal = (e) => {
+    if (e) e.preventDefault();
+    if (!appliedModalJob) return;
+    updateJobStatus(appliedModalJob, 'applied', modalUserCode.trim().toUpperCase(), modalStatusDate);
+    closeAppliedModal();
+  };
+
+  const handleRemoveAppliedFromModal = () => {
+    if (!appliedModalJob) return;
+    setTrackedJobs(prev => {
+      const updated = prev.filter(j => j.jobId !== appliedModalJob.jobId);
+      localStorage.setItem('trackedJobs', JSON.stringify(updated));
+      localStorage.setItem('appliedJobs', JSON.stringify(updated.filter(j => j.status === 'applied')));
+      return updated;
+    });
+    closeAppliedModal();
+  };
+
+  // Filtered tracked jobs based on selected date range & export status filter
+  const getExportFilteredJobs = () => {
+    return trackedJobs.filter(job => {
+      // Status filter
+      if (exportStatusFilter !== 'all' && job.status !== exportStatusFilter) {
+        return false;
+      }
+      const jobDate = job.statusDate || (job.updatedAt ? job.updatedAt.split('T')[0] : '');
+      if (exportStartDate && jobDate && jobDate < exportStartDate) {
+        return false;
+      }
+      if (exportEndDate && jobDate && jobDate > exportEndDate) {
+        return false;
+      }
+      return true;
+    });
+  };
+
+  const exportFilteredJobs = getExportFilteredJobs();
+
   const exportToCsv = () => {
-    if (appliedJobs.length === 0) return;
-    const headers = ['Title', 'Company', 'Location', 'Salary', 'Date Posted', 'URL'];
+    if (exportFilteredJobs.length === 0) return;
+    const headers = [
+      'Title', 'Company', 'Location', 'Salary', 'Date Posted', 
+      'Status', 'Applicant Code', 'Status Date', 'Job URL'
+    ];
     const csvRows = [
       headers.join(','),
-      ...appliedJobs.map(job => [
+      ...exportFilteredJobs.map(job => [
         `"${(job.title || '').replace(/"/g, '""')}"`,
         `"${(job.company || '').replace(/"/g, '""')}"`,
         `"${(job.location || '').replace(/"/g, '""')}"`,
         `"${(job.salary || '').replace(/"/g, '""')}"`,
         `"${(job.datePosted || '').replace(/"/g, '""')}"`,
+        `"${(job.status || 'applied').toUpperCase()}"`,
+        `"${(job.userCode || '').replace(/"/g, '""')}"`,
+        `"${job.statusDate || ''}"`,
         `"${job.url}"`
       ].join(','))
     ].join('\n');
@@ -183,7 +313,9 @@ export default function App() {
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'applied_jobs.csv';
+    const dateTag = exportStartDate || exportEndDate ? `_${exportStartDate || 'start'}_to_${exportEndDate || 'end'}` : '';
+    const statusTag = exportStatusFilter !== 'all' ? `_${exportStatusFilter}` : '';
+    a.download = `job_tracking${statusTag}${dateTag}.csv`;
     a.click();
   };
 
@@ -270,12 +402,12 @@ export default function App() {
               {/* Mobile Export Button */}
               <button 
                 onClick={exportToCsv}
-                disabled={appliedJobs.length === 0}
+                disabled={exportFilteredJobs.length === 0}
                 className="lg:hidden flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 text-white text-xs font-medium rounded-lg hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                title="Export applied jobs to CSV"
+                title="Export tracked jobs to CSV"
               >
                 <Download className="w-3.5 h-3.5" />
-                Export ({appliedJobs.length})
+                Export ({exportFilteredJobs.length})
               </button>
             </div>
             
@@ -338,12 +470,12 @@ export default function App() {
             <div className="hidden lg:flex items-center gap-3">
               <button 
                 onClick={exportToCsv}
-                disabled={appliedJobs.length === 0}
+                disabled={exportFilteredJobs.length === 0}
                 className="flex items-center gap-2 px-3.5 py-2 bg-slate-900 text-white text-xs font-semibold rounded-xl hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm"
-                title="Export applied jobs to CSV"
+                title="Export tracked jobs to CSV"
               >
                 <Download className="w-4 h-4" />
-                Export Applied ({appliedJobs.length})
+                Export CSV ({exportFilteredJobs.length})
               </button>
             </div>
           </div>
@@ -467,6 +599,107 @@ export default function App() {
           )}
         </div>
 
+        {/* Job Tracking Status Counters & Export Panel */}
+        <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-sm mb-6">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            
+            {/* Left: Status Counts */}
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              <div className="flex items-center gap-2">
+                <Tag className="w-4 h-4 text-blue-600" />
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Tracking Status:</span>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Applied Counter */}
+                <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold shadow-xs">
+                  <CheckCircle className="w-4 h-4 text-emerald-600" />
+                  <span>Applied:</span>
+                  <span className="px-1.5 py-0.5 rounded-md bg-emerald-600 text-white font-bold text-[11px]">
+                    {statusCounts.applied}
+                  </span>
+                </div>
+
+                {/* Checked Counter */}
+                <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-blue-50 border border-blue-200 text-blue-800 text-xs font-semibold shadow-xs">
+                  <Check className="w-4 h-4 text-blue-600" />
+                  <span>Checked:</span>
+                  <span className="px-1.5 py-0.5 rounded-md bg-blue-600 text-white font-bold text-[11px]">
+                    {statusCounts.checked}
+                  </span>
+                </div>
+
+                {/* Not Required Counter */}
+                <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-100 border border-slate-200 text-slate-700 text-xs font-semibold shadow-xs">
+                  <Ban className="w-4 h-4 text-slate-500" />
+                  <span>Not Required:</span>
+                  <span className="px-1.5 py-0.5 rounded-md bg-slate-600 text-white font-bold text-[11px]">
+                    {statusCounts.notRequired}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Right: Date Range Selector & Export Controls */}
+            <div className="flex flex-wrap items-center gap-2.5 pt-3 lg:pt-0 border-t lg:border-t-0 border-slate-100">
+              {/* Date Range Selector */}
+              <div className="flex items-center gap-1.5 text-xs text-slate-600">
+                <CalendarDays className="w-4 h-4 text-slate-400 shrink-0" />
+                <span className="font-medium text-slate-500">From:</span>
+                <input
+                  type="date"
+                  value={exportStartDate}
+                  onChange={(e) => setExportStartDate(e.target.value)}
+                  className="px-2 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-medium text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:bg-white"
+                  title="Filter export starting from this date"
+                />
+                <span className="font-medium text-slate-500">To:</span>
+                <input
+                  type="date"
+                  value={exportEndDate}
+                  onChange={(e) => setExportEndDate(e.target.value)}
+                  className="px-2 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-medium text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:bg-white"
+                  title="Filter export up to this date"
+                />
+                {(exportStartDate || exportEndDate) && (
+                  <button
+                    onClick={() => { setExportStartDate(''); setExportEndDate(''); }}
+                    className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded"
+                    title="Clear date range filter"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {/* Status Filter Dropdown for Export */}
+              <select
+                value={exportStatusFilter}
+                onChange={(e) => setExportStatusFilter(e.target.value)}
+                className="px-2.5 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-medium text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+                title="Filter by status for export"
+              >
+                <option value="all">All Statuses ({trackedJobs.length})</option>
+                <option value="applied">Applied ({statusCounts.applied})</option>
+                <option value="checked">Checked ({statusCounts.checked})</option>
+                <option value="not_required">Not Required ({statusCounts.notRequired})</option>
+              </select>
+
+              {/* Export Button */}
+              <button
+                onClick={exportToCsv}
+                disabled={exportFilteredJobs.length === 0}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 active:bg-slate-950 text-white text-xs font-semibold rounded-lg shadow-sm disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                title="Export filtered records to CSV"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Export ({exportFilteredJobs.length})</span>
+              </button>
+            </div>
+
+          </div>
+        </div>
+
         {/* Error Alert */}
         {error && (
           <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-2xl text-red-700 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm">
@@ -554,7 +787,11 @@ export default function App() {
           ) : (
             /* Job Results List */
             jobs.map((job, idx) => {
-              const isApplied = appliedJobs.some(j => j.jobId === job.jobId);
+              const trackedJob = getTrackedJob(job.jobId);
+              const currentStatus = trackedJob?.status;
+              const isApplied = currentStatus === 'applied';
+              const isChecked = currentStatus === 'checked';
+              const isNotRequired = currentStatus === 'not_required';
               const jobContact = contactInfo[job.jobId];
 
               return (
@@ -562,7 +799,11 @@ export default function App() {
                   key={job.jobId || idx} 
                   className={`group bg-white rounded-2xl p-5 sm:p-6 shadow-sm border transition-all duration-200 ${
                     isApplied 
-                      ? 'border-emerald-200 bg-emerald-50/20 shadow-emerald-100/50' 
+                      ? 'border-emerald-300 bg-emerald-50/25 shadow-emerald-100/50 ring-1 ring-emerald-200/50' 
+                      : isChecked
+                      ? 'border-blue-300 bg-blue-50/20 ring-1 ring-blue-200/40'
+                      : isNotRequired
+                      ? 'border-slate-200 bg-slate-50/70 opacity-65'
                       : 'border-slate-200 hover:shadow-md hover:border-blue-300'
                   }`}
                 >
@@ -671,27 +912,76 @@ export default function App() {
                         </a>
                       </div>
                       
-                      {/* Mark Applied Checkbox */}
-                      <label className="flex items-center gap-2 cursor-pointer select-none group/label">
-                        <div className={`relative flex items-center justify-center w-5 h-5 rounded-md border transition-all ${
-                          isApplied 
-                            ? 'bg-emerald-600 border-emerald-600' 
-                            : 'border-slate-300 group-hover/label:border-emerald-500 bg-white'
-                        }`}>
-                          <input 
-                            type="checkbox" 
-                            className="absolute opacity-0 w-full h-full cursor-pointer" 
-                            checked={isApplied}
-                            onChange={() => toggleApplied(job)}
-                          />
-                          {isApplied && <CheckCircle className="w-3.5 h-3.5 text-white" />}
+                      {/* 3 Tracking Action Buttons: Checked, Not Required, Applied */}
+                      <div className="flex flex-col items-start lg:items-end gap-2 w-full">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {/* Checked Button */}
+                          <button
+                            type="button"
+                            onClick={() => updateJobStatus(job, 'checked')}
+                            className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all border ${
+                              isChecked 
+                                ? 'bg-blue-600 text-white border-blue-600 shadow-xs' 
+                                : 'bg-white text-slate-600 border-slate-200 hover:bg-blue-50 hover:text-blue-700 hover:border-blue-200'
+                            }`}
+                            title={isChecked ? 'Marked as Checked (click to unmark)' : 'Mark as Checked'}
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            <span>{isChecked ? 'Checked' : 'Check'}</span>
+                          </button>
+
+                          {/* Not Required Button */}
+                          <button
+                            type="button"
+                            onClick={() => updateJobStatus(job, 'not_required')}
+                            className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all border ${
+                              isNotRequired 
+                                ? 'bg-slate-700 text-white border-slate-700 shadow-xs' 
+                                : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-100 hover:text-slate-800'
+                            }`}
+                            title={isNotRequired ? 'Marked as Not Required (click to unmark)' : 'Mark as Not Required'}
+                          >
+                            <Ban className="w-3.5 h-3.5" />
+                            <span>{isNotRequired ? 'Not Required' : 'Not Required'}</span>
+                          </button>
+
+                          {/* Mark Applied Button */}
+                          <button
+                            type="button"
+                            onClick={() => openAppliedModal(job)}
+                            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all border ${
+                              isApplied 
+                                ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs' 
+                                : 'bg-white text-emerald-700 border-emerald-300 hover:bg-emerald-50'
+                            }`}
+                            title={isApplied ? 'Click to edit applicant code & date' : 'Mark as Applied and enter applicant code'}
+                          >
+                            <CheckCircle className="w-3.5 h-3.5" />
+                            <span>{isApplied ? 'Applied' : 'Mark Applied'}</span>
+                          </button>
                         </div>
-                        <span className={`text-xs font-semibold transition-colors ${
-                          isApplied ? 'text-emerald-700' : 'text-slate-500 group-hover/label:text-slate-800'
-                        }`}>
-                          {isApplied ? 'Applied' : 'Mark Applied'}
-                        </span>
-                      </label>
+
+                        {/* If Applied: Display Applicant Code Pill */}
+                        {isApplied && (
+                          <div className="flex items-center gap-1.5 text-xs text-slate-600 mt-0.5">
+                            <button
+                              type="button"
+                              onClick={() => openAppliedModal(job)}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-800 hover:bg-emerald-100 font-mono text-xs font-bold transition-colors cursor-pointer"
+                              title="Click to edit applicant code or date"
+                            >
+                              <Tag className="w-3 h-3 text-emerald-600" />
+                              <span>Code: {trackedJob?.userCode || 'None'}</span>
+                              <Edit3 className="w-2.5 h-2.5 ml-0.5 text-emerald-600" />
+                            </button>
+                            {trackedJob?.statusDate && (
+                              <span className="text-[11px] text-slate-400 font-medium">
+                                ({trackedJob.statusDate})
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -765,6 +1055,112 @@ export default function App() {
           </p>
         </div>
       </footer>
+
+      {/* Modal Dialog for Entering Applicant Code (e.g. CG102) & Application Date */}
+      {appliedModalJob && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closeAppliedModal();
+          }}
+        >
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200">
+            <div className="flex items-start justify-between gap-4 pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                  <CheckCircle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">
+                    {getTrackedJob(appliedModalJob.jobId)?.status === 'applied' 
+                      ? 'Edit Application Code' 
+                      : 'Mark Job as Applied'}
+                  </h3>
+                  <p className="text-xs text-slate-500 line-clamp-1">
+                    {appliedModalJob.title} &bull; {appliedModalJob.company}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={closeAppliedModal}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition-colors"
+                title="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveAppliedModal} className="mt-4 space-y-4">
+              {/* Applicant Code Input */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+                  <Tag className="w-3.5 h-3.5 text-blue-600" />
+                  <span>Applicant / Vacancy Code</span>
+                  <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  autoFocus
+                  required
+                  value={modalUserCode}
+                  onChange={(e) => setModalUserCode(e.target.value)}
+                  placeholder="e.g. CG102"
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-900 placeholder-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 uppercase tracking-wider transition-all shadow-inner"
+                />
+                <p className="text-[11px] text-slate-500 mt-1.5 leading-normal">
+                  Enter the code (e.g. <strong className="text-slate-800">CG102</strong>) to identify this vacancy application. This code is stored and included in CSV exports.
+                </p>
+              </div>
+
+              {/* Status Date Input */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+                  <CalendarDays className="w-3.5 h-3.5 text-blue-600" />
+                  <span>Application Date</span>
+                </label>
+                <input
+                  type="date"
+                  value={modalStatusDate}
+                  onChange={(e) => setModalStatusDate(e.target.value)}
+                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-sm text-slate-700 focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all cursor-pointer"
+                />
+              </div>
+
+              {/* Action Buttons */}
+              <div className="pt-4 border-t border-slate-100 flex items-center justify-between gap-3">
+                {getTrackedJob(appliedModalJob.jobId)?.status === 'applied' ? (
+                  <button
+                    type="button"
+                    onClick={handleRemoveAppliedFromModal}
+                    className="px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 rounded-xl transition-colors"
+                  >
+                    Unmark Applied
+                  </button>
+                ) : (
+                  <div></div>
+                )}
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={closeAppliedModal}
+                    className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 rounded-xl shadow-sm transition-all"
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
