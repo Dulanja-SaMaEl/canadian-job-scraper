@@ -3,7 +3,7 @@ import {
   Search, MapPin, Building2, Banknote, Calendar, ExternalLink, Globe2, 
   AlertCircle, CheckCircle, Download, ArrowDownUp, Phone, X, RefreshCw, 
   Briefcase, ChevronLeft, ChevronRight, Laptop, Sparkles, Check, Ban, Tag, 
-  Edit3, CalendarDays 
+  Edit3, CalendarDays, UserCheck, FileText, ArrowLeft 
 } from 'lucide-react';
 
 const CANADIAN_PROVINCES = [
@@ -97,6 +97,10 @@ export default function App() {
   const [exportStartDate, setExportStartDate] = useState('');
   const [exportEndDate, setExportEndDate] = useState('');
   const [exportStatusFilter, setExportStatusFilter] = useState('all'); // 'all', 'applied', 'checked', 'not_required'
+
+  // Applicant Code search/filter & review view
+  const [selectedApplicantCode, setSelectedApplicantCode] = useState('');
+  const [isApplicantViewActive, setIsApplicantViewActive] = useState(false);
 
   const [contactInfo, setContactInfo] = useState({});
 
@@ -319,6 +323,66 @@ export default function App() {
     a.click();
   };
 
+  // Extract all unique applicant codes entered across applied jobs
+  const uniqueApplicantCodes = Array.from(
+    new Set(
+      trackedJobs
+        .filter(j => j.status === 'applied' && j.userCode && j.userCode.trim() !== '')
+        .map(j => j.userCode.trim().toUpperCase())
+    )
+  ).sort();
+
+  // Get jobs applied for a specific applicant code, respecting optional date range
+  const getApplicantJobs = (code = selectedApplicantCode) => {
+    const trimmed = (code || '').trim().toUpperCase();
+    if (!trimmed) return [];
+    return trackedJobs.filter(j => {
+      if (j.status !== 'applied') return false;
+      const jobCode = (j.userCode || '').trim().toUpperCase();
+      if (jobCode !== trimmed) return false;
+      const jobDate = j.statusDate || (j.updatedAt ? j.updatedAt.split('T')[0] : '');
+      if (exportStartDate && jobDate && jobDate < exportStartDate) return false;
+      if (exportEndDate && jobDate && jobDate > exportEndDate) return false;
+      return true;
+    });
+  };
+
+  const currentApplicantJobs = getApplicantJobs(selectedApplicantCode);
+
+  // Dedicated applicant CSV report export
+  const exportApplicantReport = (code = selectedApplicantCode) => {
+    const trimmed = (code || '').trim().toUpperCase();
+    const jobsToExport = getApplicantJobs(trimmed);
+    if (jobsToExport.length === 0) return;
+
+    const headers = [
+      'Applicant Code', 'Title', 'Company', 'Location', 'Salary', 
+      'Date Applied', 'Date Posted', 'Status', 'Job URL'
+    ];
+    const csvRows = [
+      headers.join(','),
+      ...jobsToExport.map(job => [
+        `"${(job.userCode || trimmed).replace(/"/g, '""')}"`,
+        `"${(job.title || '').replace(/"/g, '""')}"`,
+        `"${(job.company || '').replace(/"/g, '""')}"`,
+        `"${(job.location || '').replace(/"/g, '""')}"`,
+        `"${(job.salary || '').replace(/"/g, '""')}"`,
+        `"${job.statusDate || ''}"`,
+        `"${(job.datePosted || '').replace(/"/g, '""')}"`,
+        `"${(job.status || 'applied').toUpperCase()}"`,
+        `"${job.url}"`
+      ].join(','))
+    ].join('\n');
+
+    const blob = new Blob([csvRows], { type: 'text/csv;charset=utf-8;' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const dateTag = exportStartDate || exportEndDate ? `_${exportStartDate || 'start'}_to_${exportEndDate || 'end'}` : '';
+    a.download = `applicant_report_${trimmed}${dateTag}.csv`;
+    a.click();
+  };
+
   const fetchContactInfo = async (jobId, jobUrl) => {
     if (contactInfo[jobId]) return;
     setContactInfo(prev => ({ ...prev, [jobId]: { loading: true } }));
@@ -401,13 +465,13 @@ export default function App() {
 
               {/* Mobile Export Button */}
               <button 
-                onClick={exportToCsv}
-                disabled={exportFilteredJobs.length === 0}
+                onClick={isApplicantViewActive ? () => exportApplicantReport(selectedApplicantCode) : exportToCsv}
+                disabled={isApplicantViewActive ? currentApplicantJobs.length === 0 : exportFilteredJobs.length === 0}
                 className="lg:hidden flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 text-white text-xs font-medium rounded-lg hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                title="Export tracked jobs to CSV"
+                title={isApplicantViewActive ? `Export report for applicant ${selectedApplicantCode}` : "Export tracked jobs to CSV"}
               >
                 <Download className="w-3.5 h-3.5" />
-                Export ({exportFilteredJobs.length})
+                Export ({isApplicantViewActive ? currentApplicantJobs.length : exportFilteredJobs.length})
               </button>
             </div>
             
@@ -469,13 +533,15 @@ export default function App() {
             {/* Desktop Export Button */}
             <div className="hidden lg:flex items-center gap-3">
               <button 
-                onClick={exportToCsv}
-                disabled={exportFilteredJobs.length === 0}
+                onClick={isApplicantViewActive ? () => exportApplicantReport(selectedApplicantCode) : exportToCsv}
+                disabled={isApplicantViewActive ? currentApplicantJobs.length === 0 : exportFilteredJobs.length === 0}
                 className="flex items-center gap-2 px-3.5 py-2 bg-slate-900 text-white text-xs font-semibold rounded-xl hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm"
-                title="Export tracked jobs to CSV"
+                title={isApplicantViewActive ? `Export report for applicant ${selectedApplicantCode}` : "Export tracked jobs to CSV"}
               >
                 <Download className="w-4 h-4" />
-                Export CSV ({exportFilteredJobs.length})
+                {isApplicantViewActive 
+                  ? `Export ${selectedApplicantCode.toUpperCase() || 'Applicant'} (${currentApplicantJobs.length})` 
+                  : `Export CSV (${exportFilteredJobs.length})`}
               </button>
             </div>
           </div>
@@ -566,78 +632,174 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1 w-full">
-        {/* Results Counter & Active Filter Tags Bar */}
-        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2 text-sm text-slate-600">
-            {loading ? (
-              <span className="flex items-center gap-2">
-                <RefreshCw className="w-4 h-4 animate-spin text-blue-600" />
-                <span>Searching Job Bank Canada...</span>
-              </span>
-            ) : (
-              <span>
-                Found <strong className="text-slate-900 font-semibold">{totalJobs.toLocaleString()}</strong> jobs{' '}
-                {activeProvinceObj?.code ? (
-                  <>in <strong className="text-blue-600 font-semibold">{activeProvinceObj.label}</strong></>
-                ) : (
-                  'across Canada'
-                )}
-                {searchQuery && (
-                  <> for &ldquo;<strong className="text-slate-900">{searchQuery}</strong>&rdquo;</>
-                )}
-              </span>
+        {/* Results Counter & Active Filter Tags Bar (Live Search mode only) */}
+        {!isApplicantViewActive && (
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm text-slate-600">
+              {loading ? (
+                <span className="flex items-center gap-2">
+                  <RefreshCw className="w-4 h-4 animate-spin text-blue-600" />
+                  <span>Searching Job Bank Canada...</span>
+                </span>
+              ) : (
+                <span>
+                  Found <strong className="text-slate-900 font-semibold">{totalJobs.toLocaleString()}</strong> jobs{' '}
+                  {activeProvinceObj?.code ? (
+                    <>in <strong className="text-blue-600 font-semibold">{activeProvinceObj.label}</strong></>
+                  ) : (
+                    'across Canada'
+                  )}
+                  {searchQuery && (
+                    <> for &ldquo;<strong className="text-slate-900">{searchQuery}</strong>&rdquo;</>
+                  )}
+                </span>
+              )}
+            </div>
+
+            {hasActiveFilters && !loading && (
+              <button
+                onClick={resetAllFilters}
+                className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1 underline underline-offset-2"
+              >
+                Reset all filters
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Job Tracking Status Counters & Export Panel */}
+        <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-sm mb-6 space-y-4">
+          {/* Top Row: Live Status Counts & Recent Applicant Code Chips */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-2 mr-1">
+                <Tag className="w-4 h-4 text-blue-600" />
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Tracking:</span>
+              </div>
+
+              {/* Applied Counter */}
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold shadow-xs">
+                <CheckCircle className="w-4 h-4 text-emerald-600" />
+                <span>Applied:</span>
+                <span className="px-1.5 py-0.5 rounded-md bg-emerald-600 text-white font-bold text-[11px]">
+                  {statusCounts.applied}
+                </span>
+              </div>
+
+              {/* Checked Counter */}
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-blue-50 border border-blue-200 text-blue-800 text-xs font-semibold shadow-xs">
+                <Check className="w-4 h-4 text-blue-600" />
+                <span>Checked:</span>
+                <span className="px-1.5 py-0.5 rounded-md bg-blue-600 text-white font-bold text-[11px]">
+                  {statusCounts.checked}
+                </span>
+              </div>
+
+              {/* Not Required Counter */}
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-100 border border-slate-200 text-slate-700 text-xs font-semibold shadow-xs">
+                <Ban className="w-4 h-4 text-slate-500" />
+                <span>Not Required:</span>
+                <span className="px-1.5 py-0.5 rounded-md bg-slate-600 text-white font-bold text-[11px]">
+                  {statusCounts.notRequired}
+                </span>
+              </div>
+            </div>
+
+            {/* Quick Applicant Code Chips */}
+            {uniqueApplicantCodes.length > 0 && (
+              <div className="flex items-center gap-1.5 text-xs text-slate-500 flex-wrap">
+                <span className="font-medium text-slate-400">Applicant Codes:</span>
+                <div className="flex flex-wrap items-center gap-1">
+                  {uniqueApplicantCodes.slice(0, 6).map(c => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => {
+                        setSelectedApplicantCode(c);
+                        setIsApplicantViewActive(true);
+                      }}
+                      className={`px-2 py-0.5 rounded-md text-xs font-mono font-bold transition-all ${
+                        isApplicantViewActive && selectedApplicantCode.toUpperCase() === c
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'bg-slate-100 text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 border border-slate-200/60'
+                      }`}
+                      title={`View all jobs applied for applicant ${c}`}
+                    >
+                      {c}
+                    </button>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
 
-          {hasActiveFilters && !loading && (
-            <button
-              onClick={resetAllFilters}
-              className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1 underline underline-offset-2"
-            >
-              Reset all filters
-            </button>
-          )}
-        </div>
-
-        {/* Job Tracking Status Counters & Export Panel */}
-        <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-sm mb-6">
+          {/* Bottom Row: Applicant Filter Input & Date Range Export Controls */}
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             
-            {/* Left: Status Counts */}
-            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-              <div className="flex items-center gap-2">
-                <Tag className="w-4 h-4 text-blue-600" />
-                <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Tracking Status:</span>
+            {/* Left: Applicant Code Filter Input & View Switch */}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1.5 text-xs text-slate-600">
+                <UserCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span className="font-semibold text-slate-700">Applicant Code:</span>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2">
-                {/* Applied Counter */}
-                <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold shadow-xs">
-                  <CheckCircle className="w-4 h-4 text-emerald-600" />
-                  <span>Applied:</span>
-                  <span className="px-1.5 py-0.5 rounded-md bg-emerald-600 text-white font-bold text-[11px]">
-                    {statusCounts.applied}
-                  </span>
-                </div>
+              <div className="relative flex items-center">
+                <input
+                  type="text"
+                  list="applicant-codes-list"
+                  value={selectedApplicantCode}
+                  onChange={(e) => setSelectedApplicantCode(e.target.value.toUpperCase())}
+                  placeholder="e.g. CG102"
+                  className="w-32 sm:w-36 pl-2.5 pr-6 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-mono font-bold text-slate-900 uppercase placeholder:normal-case placeholder:font-normal placeholder:text-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500 shadow-2xs"
+                />
+                <datalist id="applicant-codes-list">
+                  {uniqueApplicantCodes.map(c => (
+                    <option key={c} value={c} />
+                  ))}
+                </datalist>
 
-                {/* Checked Counter */}
-                <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-blue-50 border border-blue-200 text-blue-800 text-xs font-semibold shadow-xs">
-                  <Check className="w-4 h-4 text-blue-600" />
-                  <span>Checked:</span>
-                  <span className="px-1.5 py-0.5 rounded-md bg-blue-600 text-white font-bold text-[11px]">
-                    {statusCounts.checked}
-                  </span>
-                </div>
-
-                {/* Not Required Counter */}
-                <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-100 border border-slate-200 text-slate-700 text-xs font-semibold shadow-xs">
-                  <Ban className="w-4 h-4 text-slate-500" />
-                  <span>Not Required:</span>
-                  <span className="px-1.5 py-0.5 rounded-md bg-slate-600 text-white font-bold text-[11px]">
-                    {statusCounts.notRequired}
-                  </span>
-                </div>
+                {selectedApplicantCode && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedApplicantCode('');
+                      setIsApplicantViewActive(false);
+                    }}
+                    className="absolute right-1.5 text-slate-400 hover:text-slate-600 p-0.5 rounded"
+                    title="Clear applicant code"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
+
+              {/* View Applicant Jobs Toggle */}
+              <button
+                type="button"
+                disabled={!selectedApplicantCode.trim()}
+                onClick={() => setIsApplicantViewActive(!isApplicantViewActive)}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all border ${
+                  isApplicantViewActive 
+                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs' 
+                    : 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100 disabled:opacity-40 disabled:cursor-not-allowed'
+                }`}
+                title="View all jobs applied for this applicant"
+              >
+                <FileText className="w-3.5 h-3.5" />
+                <span>{isApplicantViewActive ? 'Viewing Applicant Jobs' : `View Applied (${currentApplicantJobs.length})`}</span>
+              </button>
+
+              {isApplicantViewActive && (
+                <button
+                  type="button"
+                  onClick={() => setIsApplicantViewActive(false)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-all border border-slate-200"
+                  title="Switch back to Job Bank Canada live search"
+                >
+                  <ArrowLeft className="w-3.5 h-3.5" />
+                  <span>Back to Live Search</span>
+                </button>
+              )}
             </div>
 
             {/* Right: Date Range Selector & Export Controls */}
@@ -672,36 +834,99 @@ export default function App() {
                 )}
               </div>
 
-              {/* Status Filter Dropdown for Export */}
-              <select
-                value={exportStatusFilter}
-                onChange={(e) => setExportStatusFilter(e.target.value)}
-                className="px-2.5 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-medium text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
-                title="Filter by status for export"
-              >
-                <option value="all">All Statuses ({trackedJobs.length})</option>
-                <option value="applied">Applied ({statusCounts.applied})</option>
-                <option value="checked">Checked ({statusCounts.checked})</option>
-                <option value="not_required">Not Required ({statusCounts.notRequired})</option>
-              </select>
+              {/* Status Filter Dropdown for Standard Export */}
+              {!isApplicantViewActive && (
+                <select
+                  value={exportStatusFilter}
+                  onChange={(e) => setExportStatusFilter(e.target.value)}
+                  className="px-2.5 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-medium text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+                  title="Filter by status for export"
+                >
+                  <option value="all">All Statuses ({trackedJobs.length})</option>
+                  <option value="applied">Applied ({statusCounts.applied})</option>
+                  <option value="checked">Checked ({statusCounts.checked})</option>
+                  <option value="not_required">Not Required ({statusCounts.notRequired})</option>
+                </select>
+              )}
 
               {/* Export Button */}
-              <button
-                onClick={exportToCsv}
-                disabled={exportFilteredJobs.length === 0}
-                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 active:bg-slate-950 text-white text-xs font-semibold rounded-lg shadow-sm disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-                title="Export filtered records to CSV"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Export ({exportFilteredJobs.length})</span>
-              </button>
+              {isApplicantViewActive || (selectedApplicantCode.trim() && currentApplicantJobs.length > 0) ? (
+                <button
+                  type="button"
+                  onClick={() => exportApplicantReport(selectedApplicantCode)}
+                  disabled={currentApplicantJobs.length === 0}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 active:bg-emerald-900 text-white text-xs font-semibold rounded-lg shadow-sm disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                  title={`Export CSV report for applicant ${selectedApplicantCode.toUpperCase()}`}
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Export {selectedApplicantCode.toUpperCase()} Report ({currentApplicantJobs.length})</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={exportToCsv}
+                  disabled={exportFilteredJobs.length === 0}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 active:bg-slate-950 text-white text-xs font-semibold rounded-lg shadow-sm disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                  title="Export filtered records to CSV"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Export ({exportFilteredJobs.length})</span>
+                </button>
+              )}
             </div>
 
           </div>
         </div>
 
+        {/* Applicant View Mode Header Banner */}
+        {isApplicantViewActive && (
+          <div className="mb-6 p-4 sm:p-5 bg-gradient-to-r from-slate-900 via-blue-950 to-indigo-950 text-white rounded-2xl shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border border-blue-900/50">
+            <div className="flex items-center gap-3.5">
+              <div className="w-12 h-12 rounded-xl bg-blue-600/30 flex items-center justify-center text-white border border-blue-400/30 shrink-0">
+                <UserCheck className="w-6 h-6 text-emerald-400" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs uppercase tracking-wider text-blue-300 font-semibold">Applicant Review Mode</span>
+                  <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
+                    {selectedApplicantCode.toUpperCase() || 'ALL'}
+                  </span>
+                </div>
+                <h2 className="text-lg font-bold text-white mt-0.5">
+                  {currentApplicantJobs.length} {currentApplicantJobs.length === 1 ? 'Job' : 'Jobs'} Applied for {selectedApplicantCode.toUpperCase() || 'this applicant'}
+                </h2>
+                <p className="text-xs text-slate-300 mt-0.5">
+                  Reviewing all saved applications in local browser storage {exportStartDate || exportEndDate ? `(filtered by date)` : ''}.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <button
+                type="button"
+                onClick={() => exportApplicantReport(selectedApplicantCode)}
+                disabled={currentApplicantJobs.length === 0}
+                className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white text-xs font-bold rounded-xl shadow transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Download CSV report for this applicant"
+              >
+                <Download className="w-4 h-4" />
+                <span>Export Report ({currentApplicantJobs.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsApplicantViewActive(false)}
+                className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 px-4 py-2 bg-white/10 hover:bg-white/20 active:bg-white/30 text-white text-xs font-semibold rounded-xl border border-white/20 transition-all"
+                title="Return to Job Bank Canada live job search"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span>Live Search</span>
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Error Alert */}
-        {error && (
+        {error && !isApplicantViewActive && (
           <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-2xl text-red-700 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm">
             <div className="flex items-start gap-3">
               <AlertCircle className="w-5 h-5 mt-0.5 text-red-600 flex-shrink-0" />
@@ -722,7 +947,7 @@ export default function App() {
 
         {/* Job Cards List */}
         <div className="space-y-4">
-          {loading ? (
+          {!isApplicantViewActive && loading ? (
             Array.from({ length: 6 }).map((_, i) => (
               <div key={i} className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 animate-pulse">
                 <div className="flex flex-col sm:flex-row justify-between gap-4">
@@ -748,47 +973,72 @@ export default function App() {
                 </div>
               </div>
             ))
-          ) : jobs.length === 0 && !error ? (
+          ) : (isApplicantViewActive ? currentApplicantJobs : jobs).length === 0 && !error ? (
             /* Empty State */
-            <div className="text-center py-16 px-4 bg-white rounded-2xl border border-slate-200 shadow-sm">
-              <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-blue-50 text-blue-600 mb-4 shadow-inner">
-                <Search className="h-8 w-8" />
-              </div>
-              <h3 className="text-lg font-bold text-slate-900">No matching jobs found</h3>
-              <p className="mt-1.5 text-sm text-slate-500 max-w-md mx-auto">
-                {internationalOnly 
-                  ? 'No international-eligible jobs found for this query. Try toggling "Canadians & International" off to search all 65,000+ Canadian jobs.'
-                  : 'Try adjusting your search keywords, clearing province filters, or searching for broader terms.'}
-              </p>
-
-              <div className="mt-6 flex flex-wrap items-center justify-center gap-2 max-w-lg mx-auto">
-                {POPULAR_SEARCHES.slice(0, 5).map((term) => (
+            isApplicantViewActive ? (
+              <div className="text-center py-16 px-4 bg-white rounded-2xl border border-slate-200 shadow-sm">
+                <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-emerald-50 text-emerald-600 mb-4 shadow-inner">
+                  <UserCheck className="h-8 w-8" />
+                </div>
+                <h3 className="text-lg font-bold text-slate-900">
+                  No applied jobs found for applicant code &ldquo;{selectedApplicantCode}&rdquo;
+                </h3>
+                <p className="mt-1.5 text-sm text-slate-500 max-w-md mx-auto">
+                  {exportStartDate || exportEndDate 
+                    ? 'No applications match the selected date range. Try clearing or adjusting the From/To dates.'
+                    : 'You have not marked any vacancies as applied with this applicant code yet. Return to live search and mark jobs as applied to assign them to this applicant.'}
+                </p>
+                <div className="mt-6 flex items-center justify-center gap-2">
                   <button
-                    key={term}
-                    onClick={() => handleSelectQuickChip(term)}
-                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-100 text-slate-700 hover:bg-blue-50 hover:text-blue-600 transition-colors"
+                    onClick={() => setIsApplicantViewActive(false)}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-xl transition-colors shadow-sm inline-flex items-center gap-1.5"
                   >
-                    Search &ldquo;{term}&rdquo;
-                  </button>
-                ))}
-              </div>
-
-              {hasActiveFilters && (
-                <div className="mt-6">
-                  <button
-                    onClick={resetAllFilters}
-                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-xl transition-colors shadow-sm"
-                  >
-                    Clear All Filters
+                    <ArrowLeft className="w-3.5 h-3.5" />
+                    <span>Back to Live Job Search</span>
                   </button>
                 </div>
-              )}
-            </div>
+              </div>
+            ) : (
+              <div className="text-center py-16 px-4 bg-white rounded-2xl border border-slate-200 shadow-sm">
+                <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-blue-50 text-blue-600 mb-4 shadow-inner">
+                  <Search className="h-8 w-8" />
+                </div>
+                <h3 className="text-lg font-bold text-slate-900">No matching jobs found</h3>
+                <p className="mt-1.5 text-sm text-slate-500 max-w-md mx-auto">
+                  {internationalOnly 
+                    ? 'No international-eligible jobs found for this query. Try toggling "Canadians & International" off to search all 65,000+ Canadian jobs.'
+                    : 'Try adjusting your search keywords, clearing province filters, or searching for broader terms.'}
+                </p>
+
+                <div className="mt-6 flex flex-wrap items-center justify-center gap-2 max-w-lg mx-auto">
+                  {POPULAR_SEARCHES.slice(0, 5).map((term) => (
+                    <button
+                      key={term}
+                      onClick={() => handleSelectQuickChip(term)}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-100 text-slate-700 hover:bg-blue-50 hover:text-blue-600 transition-colors"
+                    >
+                      Search &ldquo;{term}&rdquo;
+                    </button>
+                  ))}
+                </div>
+
+                {hasActiveFilters && (
+                  <div className="mt-6">
+                    <button
+                      onClick={resetAllFilters}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-xl transition-colors shadow-sm"
+                    >
+                      Clear All Filters
+                    </button>
+                  </div>
+                )}
+              </div>
+            )
           ) : (
             /* Job Results List */
-            jobs.map((job, idx) => {
-              const trackedJob = getTrackedJob(job.jobId);
-              const currentStatus = trackedJob?.status;
+            (isApplicantViewActive ? currentApplicantJobs : jobs).map((job, idx) => {
+              const trackedJob = getTrackedJob(job.jobId) || job;
+              const currentStatus = trackedJob?.status || (isApplicantViewActive ? 'applied' : undefined);
               const isApplied = currentStatus === 'applied';
               const isChecked = currentStatus === 'checked';
               const isNotRequired = currentStatus === 'not_required';
@@ -990,8 +1240,8 @@ export default function App() {
           )}
         </div>
 
-        {/* Enhanced Multi-Page Pagination */}
-        {totalPages > 1 && !loading && (
+        {/* Enhanced Multi-Page Pagination (Live Search mode only) */}
+        {!isApplicantViewActive && totalPages > 1 && !loading && (
           <nav className="mt-10 flex flex-col sm:flex-row items-center justify-between gap-4 border-t border-slate-200 pt-6">
             <div className="text-xs text-slate-500 order-2 sm:order-1">
               Page <strong className="text-slate-900 font-semibold">{page}</strong> of{' '}
