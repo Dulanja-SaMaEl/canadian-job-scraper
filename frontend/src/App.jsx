@@ -669,129 +669,117 @@ export default function App({ currentUser, onLogout }) {
       {/* Top Navigation */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-20 shadow-sm backdrop-blur-md bg-white/95">
         <div className="max-w-6xl mx-auto px-4 py-3 sm:px-6 lg:px-8">
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-            
+          {/* Top Row: Logo & User Navigation */}
+          <div className="flex items-center justify-between gap-4 pb-3 border-b border-slate-100">
             {/* Logo and Brand */}
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-700 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-blue-500/20">
-                  <Briefcase className="w-5 h-5" />
-                </div>
-                <div>
-                  <h1 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
-                    Canadian Job Finder
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-blue-100 text-blue-800">
-                      Live
-                    </span>
-                  </h1>
-                  <p className="text-xs text-slate-500 hidden sm:block">
-                    Real-time search across government & employer postings
-                  </p>
-                </div>
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-700 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-blue-500/20 shrink-0">
+                <Briefcase className="w-5 h-5" />
               </div>
-
-              {/* Mobile Export + Logout */}
-              <div className="flex items-center gap-2 lg:hidden">
-                <button 
-                  onClick={isApplicantViewActive ? () => exportApplicantReport(selectedApplicantCode) : exportToCsv}
-                  disabled={isApplicantViewActive ? currentApplicantJobs.length === 0 : exportFilteredJobs.length === 0}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 text-white text-xs font-medium rounded-lg hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                  title={isApplicantViewActive ? `Export report for applicant ${selectedApplicantCode}` : "Export tracked jobs to CSV"}
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  Export ({isApplicantViewActive ? currentApplicantJobs.length : exportFilteredJobs.length})
-                </button>
+              <div>
+                <h1 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+                  Canadian Job Finder
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-blue-100 text-blue-800">
+                    Live
+                  </span>
+                </h1>
+                <p className="text-xs text-slate-500 hidden sm:block">
+                  Real-time search across government & employer postings
+                </p>
               </div>
             </div>
-            
-            {/* Search Input and Province Selector */}
-            <form onSubmit={handleInstantSearch} className="flex flex-col sm:flex-row items-center gap-2 flex-1 max-w-2xl lg:ml-6">
-              <div className="relative flex-1 w-full">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                  <Search className="h-4 w-4" />
-                </div>
-                <input
-                  type="text"
-                  className="block w-full pl-10 pr-9 py-2.5 text-sm text-slate-900 border border-slate-300 rounded-xl bg-slate-50 placeholder-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all shadow-sm"
-                  placeholder="Job title, NOC code, or skill (e.g. Software, Nurse, Driver)..."
-                  value={keyword}
-                  onChange={(e) => setKeyword(e.target.value)}
-                />
-                {keyword && (
-                  <button
-                    type="button"
-                    onClick={handleClearSearch}
-                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 transition-colors"
-                    title="Clear search"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                )}
-              </div>
 
-              {/* Province Dropdown */}
-              <div className="relative w-full sm:w-48">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                  <MapPin className="h-4 w-4" />
-                </div>
-                <select
-                  value={province}
-                  onChange={(e) => {
-                    setProvince(e.target.value);
-                    setPage(1);
-                  }}
-                  className="block w-full pl-9 pr-8 py-2.5 text-sm border border-slate-300 rounded-xl bg-slate-50 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-medium text-slate-700 transition-all shadow-sm cursor-pointer"
-                >
-                  {CANADIAN_PROVINCES.map(p => (
-                    <option key={p.code} value={p.code}>
-                      {p.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <button
-                type="submit"
-                className="w-full sm:w-auto px-5 py-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-sm font-semibold rounded-xl shadow-sm transition-colors flex items-center justify-center gap-2"
-              >
-                <span>Search</span>
-              </button>
-            </form>
-
-            {/* Desktop: Export + User info + Logout */}
-            <div className="hidden lg:flex items-center gap-3">
+            {/* Desktop & Mobile Actions: Export + User Pill + Logout */}
+            <div className="flex items-center gap-2 sm:gap-3">
               <button 
                 onClick={isApplicantViewActive ? () => exportApplicantReport(selectedApplicantCode) : exportToCsv}
                 disabled={isApplicantViewActive ? currentApplicantJobs.length === 0 : exportFilteredJobs.length === 0}
-                className="flex items-center gap-2 px-3.5 py-2 bg-slate-900 text-white text-xs font-semibold rounded-xl hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm"
+                className="flex items-center gap-1.5 px-3 py-2 bg-slate-900 text-white text-xs font-semibold rounded-xl hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm"
                 title={isApplicantViewActive ? `Export report for applicant ${selectedApplicantCode}` : "Export tracked jobs to CSV"}
               >
-                <Download className="w-4 h-4" />
-                {isApplicantViewActive 
-                  ? `Export ${selectedApplicantCode.toUpperCase() || 'Applicant'} (${currentApplicantJobs.length})` 
-                  : `Export CSV (${exportFilteredJobs.length})`}
+                <Download className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">
+                  {isApplicantViewActive 
+                    ? `Export ${selectedApplicantCode.toUpperCase() || 'Applicant'}` 
+                    : 'Export CSV'}
+                </span>
+                <span>({isApplicantViewActive ? currentApplicantJobs.length : exportFilteredJobs.length})</span>
               </button>
 
               {/* User info pill */}
-              <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-100 rounded-xl border border-slate-200">
-                <div className="w-6 h-6 rounded-full bg-blue-600 flex items-center justify-center text-white text-[10px] font-bold uppercase">
+              <div className="flex items-center gap-2 px-2.5 sm:px-3 py-1.5 bg-slate-100 rounded-xl border border-slate-200">
+                <div className="w-6 h-6 rounded-full bg-blue-600 flex items-center justify-center text-white text-[10px] font-bold uppercase shrink-0">
                   {currentUser?.username?.[0] || 'U'}
                 </div>
-                <span className="text-xs font-semibold text-slate-700 capitalize">
+                <span className="text-xs font-semibold text-slate-700 capitalize hidden sm:inline">
                   {currentUser?.username || 'User'}
                 </span>
               </div>
 
               <button
                 onClick={onLogout}
-                className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-600 hover:text-red-600 hover:bg-red-50 rounded-xl border border-slate-200 hover:border-red-200 transition-all"
+                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-semibold text-slate-600 hover:text-red-600 hover:bg-red-50 rounded-xl border border-slate-200 hover:border-red-200 transition-all"
                 title="Sign out"
               >
                 <LogOut className="w-3.5 h-3.5" />
-                Logout
+                <span className="hidden sm:inline">Logout</span>
               </button>
             </div>
           </div>
+
+          {/* Search Row: Spacious Full-Width Search Input, Province Dropdown & Button */}
+          <form onSubmit={handleInstantSearch} className="flex flex-col sm:flex-row items-center gap-2.5 pt-3">
+            <div className="relative flex-1 w-full min-w-0">
+              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                <Search className="h-4 w-4" />
+              </div>
+              <input
+                type="text"
+                className="block w-full pl-10 pr-9 py-2.5 text-sm text-slate-900 border border-slate-300 rounded-xl bg-slate-50 placeholder-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all shadow-sm"
+                placeholder="Job title, NOC code, or skill (e.g. Software, Nurse, Driver)..."
+                value={keyword}
+                onChange={(e) => setKeyword(e.target.value)}
+              />
+              {keyword && (
+                <button
+                  type="button"
+                  onClick={handleClearSearch}
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 transition-colors"
+                  title="Clear search"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+
+            {/* Province Dropdown */}
+            <div className="relative w-full sm:w-52 shrink-0">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                <MapPin className="h-4 w-4" />
+              </div>
+              <select
+                value={province}
+                onChange={(e) => {
+                  setProvince(e.target.value);
+                  setPage(1);
+                }}
+                className="block w-full pl-9 pr-8 py-2.5 text-sm border border-slate-300 rounded-xl bg-slate-50 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-medium text-slate-700 transition-all shadow-sm cursor-pointer"
+              >
+                {CANADIAN_PROVINCES.map(p => (
+                  <option key={p.code} value={p.code}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <button
+              type="submit"
+              className="w-full sm:w-auto px-6 py-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-sm font-semibold rounded-xl shadow-sm transition-colors flex items-center justify-center gap-2 shrink-0"
+            >
+              <span>Search</span>
+            </button>
+          </form>
 
           {/* Filter Bar & Toggles */}
           <div className="flex flex-wrap items-center justify-between gap-3 mt-3 pt-3 border-t border-slate-100 text-xs">
