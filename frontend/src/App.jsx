@@ -141,8 +141,13 @@ export default function App({ currentUser, onLogout }) {
 
   const abortControllerRef = useRef(null);
 
-  // Sync debounced keyword to searchQuery and reset page
+  // Sync debounced keyword → searchQuery. Skip the very first mount run (value unchanged).
+  const isFirstMountRef = useRef(true);
   useEffect(() => {
+    if (isFirstMountRef.current) {
+      isFirstMountRef.current = false;
+      return;
+    }
     setSearchQuery(debouncedKeyword);
     setPage(1);
   }, [debouncedKeyword]);
@@ -166,6 +171,7 @@ export default function App({ currentUser, onLogout }) {
   };
 
   const fetchJobs = useCallback(async () => {
+    // Abort any previous in-flight request
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
@@ -198,14 +204,18 @@ export default function App({ currentUser, onLogout }) {
       }
 
       const data = await response.json();
+      // Guard: if this request was superseded while awaiting, bail silently
+      if (controller.signal.aborted) return;
       setJobs(data.jobs || []);
       setTotalJobs(data.totalJobs || 0);
       setTotalPages(data.totalPages || 1);
+      setLoading(false);
     } catch (err) {
-      if (err.name === 'AbortError') return;
+      // AbortError = a newer request replaced this one.
+      // Do NOT clear loading — the newer request will handle it when it settles.
+      if (err.name === 'AbortError' || controller.signal.aborted) return;
       setError(err.message || 'Failed to fetch jobs.');
       setJobs([]);
-    } finally {
       setLoading(false);
     }
   }, [searchQuery, page, sort, province, internationalOnly, remoteOnly]);
