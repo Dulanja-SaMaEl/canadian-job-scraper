@@ -231,6 +231,71 @@ export default function App({ currentUser, onLogout }) {
     };
   }, [fetchJobs]);
 
+  // On mount: fetch latest tracked jobs from Supabase to stay in sync across all PCs
+  useEffect(() => {
+    const fetchLatestFromCloud = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('tracked_jobs')
+          .select('*')
+          .order('updated_at', { ascending: false });
+
+        if (error) throw error;
+        if (data && data.length > 0) {
+          const cloudUnified = data.map(r => ({
+            jobId: r.job_id,
+            jobNumber: r.job_id,
+            title: r.title || 'Untitled Job',
+            company: r.company || 'Unknown Company',
+            location: r.location || 'Canada',
+            salary: r.salary || 'Not listed',
+            datePosted: r.date_posted || '',
+            url: r.url || '',
+            flags: r.flags || [],
+            isApplied: Boolean(r.is_applied),
+            isChecked: Boolean(r.is_checked),
+            isNotRequired: Boolean(r.is_not_required),
+            userCode: (r.user_codes || []).join(' '),
+            userCodes: r.user_codes || [],
+            statusDate: r.status_date || '',
+            username: r.username || 'Unknown',
+            updatedAt: r.updated_at
+          }));
+
+          setTrackedJobs(prev => {
+            const map = new Map();
+            cloudUnified.forEach(j => map.set(j.jobId, j));
+            (prev || []).forEach(localJ => {
+              if (map.has(localJ.jobId)) {
+                const cloudJ = map.get(localJ.jobId);
+                const mergedCodes = Array.from(new Set([
+                  ...parseApplicantCodes(cloudJ.userCode),
+                  ...parseApplicantCodes(localJ.userCode)
+                ]));
+                map.set(localJ.jobId, {
+                  ...cloudJ,
+                  ...localJ,
+                  isApplied: cloudJ.isApplied || localJ.isApplied,
+                  isChecked: cloudJ.isChecked || localJ.isChecked,
+                  isNotRequired: (cloudJ.isNotRequired || localJ.isNotRequired) && !(cloudJ.isApplied || localJ.isApplied || cloudJ.isChecked || localJ.isChecked),
+                  userCode: mergedCodes.join(' '),
+                  userCodes: mergedCodes,
+                });
+              } else {
+                map.set(localJ.jobId, localJ);
+              }
+            });
+            return Array.from(map.values());
+          });
+        }
+      } catch (err) {
+        console.warn('Could not auto-fetch cloud tracked jobs on mount:', err);
+      }
+    };
+
+    fetchLatestFromCloud();
+  }, []);
+
   // ─────────────────────────────────────────────────────────────────────
   // STATUS COUNTS (boolean flags)
   // ─────────────────────────────────────────────────────────────────────
@@ -570,59 +635,146 @@ export default function App({ currentUser, onLogout }) {
   };
 
   // ─────────────────────────────────────────────────────────────────────
-  // UPLOAD TO SUPABASE (temporary migration button)
+  // SYNC TO CLOUD & CLEAR LOCAL (Permanent — Eliminates redundancy across PCs)
   // ─────────────────────────────────────────────────────────────────────
   const uploadToSupabase = async () => {
     setUploadStatus('loading');
-    setUploadMessage('');
+    setUploadMessage('Merging with cloud & checking duplicates...');
     try {
-      // Ensure stable browser session ID
       let sessionId = localStorage.getItem('browserSessionId');
       if (!sessionId) {
         sessionId = crypto.randomUUID();
         localStorage.setItem('browserSessionId', sessionId);
       }
 
-      const jobs = trackedJobs;
-      if (jobs.length === 0) {
-        setUploadStatus('error');
-        setUploadMessage('No tracked jobs to upload.');
-        return;
+      // 1. Fetch current cloud records to check for duplicates & merge fields
+      const { data: cloudData, error: fetchErr } = await supabase
+        .from('tracked_jobs')
+        .select('*');
+
+      if (fetchErr) throw fetchErr;
+      const existingCloudRows = cloudData || [];
+
+      // Create lookup maps by job_id and cleaned URL
+      const cloudByJobId = new Map();
+      const cloudByUrl = new Map();
+      existingCloudRows.forEach(row => {
+        if (row.job_id) cloudByJobId.set(String(row.job_id), row);
+        if (row.url) {
+          const cleanUrl = row.url.split(';')[0].split('?')[0];
+          cloudByUrl.set(cleanUrl, row);
+        }
+      });
+
+      // 2. Prepare local jobs and merge with existing cloud records
+      const localJobs = trackedJobs || [];
+      const recordsToUpsert = [];
+
+      const findCloudMatch = (job) => {
+        const jId = String(job.jobNumber || job.jobId || '');
+        if (jId && cloudByJobId.has(jId)) return cloudByJobId.get(jId);
+        if (job.url) {
+          const clean = job.url.split(';')[0].split('?')[0];
+          if (cloudByUrl.has(clean)) return cloudByUrl.get(clean);
+        }
+        return null;
+      };
+
+      localJobs.forEach(job => {
+        const cloudMatch = findCloudMatch(job);
+        const resolvedJobId = String(job.jobNumber || job.jobId || cloudMatch?.job_id || '');
+        if (!resolvedJobId) return;
+
+        const localCodes = parseApplicantCodes(job.userCode || '');
+        const existingCodes = cloudMatch?.user_codes || [];
+        const mergedCodes = Array.from(new Set([...existingCodes, ...localCodes]));
+
+        const mergedApplied = Boolean(job.isApplied || cloudMatch?.is_applied);
+        const mergedChecked = Boolean(job.isChecked || cloudMatch?.is_checked);
+        const mergedNotRequired = (job.isNotRequired || cloudMatch?.is_not_required) && !mergedApplied && !mergedChecked;
+
+        const bestStatusDate = job.statusDate || cloudMatch?.status_date || new Date().toISOString().split('T')[0];
+        const bestUsername = currentUser?.username || cloudMatch?.username || 'Unknown';
+
+        const row = {
+          browser_session_id: cloudMatch?.browser_session_id || sessionId,
+          username: bestUsername,
+          user_id: null,
+          job_id: resolvedJobId,
+          title: job.title || cloudMatch?.title || null,
+          company: job.company || cloudMatch?.company || null,
+          location: job.location || cloudMatch?.location || null,
+          salary: job.salary || cloudMatch?.salary || null,
+          date_posted: job.datePosted || cloudMatch?.date_posted || null,
+          url: job.url || cloudMatch?.url || null,
+          flags: job.flags || cloudMatch?.flags || [],
+          is_applied: mergedApplied,
+          is_checked: mergedChecked,
+          is_not_required: mergedNotRequired,
+          user_codes: mergedCodes,
+          status_date: bestStatusDate,
+          updated_at: new Date().toISOString(),
+          uploaded_at: new Date().toISOString(),
+        };
+
+        if (cloudMatch?.id) {
+          row.id = cloudMatch.id;
+        }
+
+        recordsToUpsert.push(row);
+      });
+
+      // 3. Batch upsert merged records into Supabase
+      if (recordsToUpsert.length > 0) {
+        const chunkSize = 100;
+        for (let i = 0; i < recordsToUpsert.length; i += chunkSize) {
+          const chunk = recordsToUpsert.slice(i, i + chunkSize);
+          const { error: upsertErr } = await supabase
+            .from('tracked_jobs')
+            .upsert(chunk, { onConflict: 'id' });
+          if (upsertErr) throw upsertErr;
+        }
       }
 
-      const rows = jobs.map(job => ({
-        browser_session_id: sessionId,
-        username: currentUser?.username || null,
-        user_id: null,
-        job_id: job.jobNumber || job.jobId,
-        title: job.title || null,
-        company: job.company || null,
-        location: job.location || null,
-        salary: job.salary || null,
-        date_posted: job.datePosted || null,
-        url: job.url || null,
-        flags: job.flags || [],
-        is_applied: job.isApplied || false,
-        is_checked: job.isChecked || false,
-        is_not_required: job.isNotRequired || false,
-        user_codes: parseApplicantCodes(job.userCode || ''),
-        status_date: job.statusDate || null,
-        updated_at: job.updatedAt || new Date().toISOString(),
-        uploaded_at: new Date().toISOString(),
+      // 4. Clear local storage cache
+      localStorage.removeItem('trackedJobs');
+      localStorage.removeItem('appliedJobs');
+
+      // 5. Fetch fresh unified cloud records & update state so UI stays active
+      const { data: freshData, error: refreshErr } = await supabase
+        .from('tracked_jobs')
+        .select('*')
+        .order('updated_at', { ascending: false });
+
+      if (refreshErr) throw refreshErr;
+
+      const unifiedJobs = (freshData || []).map(r => ({
+        jobId: r.job_id,
+        jobNumber: r.job_id,
+        title: r.title || 'Untitled Job',
+        company: r.company || 'Unknown Company',
+        location: r.location || 'Canada',
+        salary: r.salary || 'Not listed',
+        datePosted: r.date_posted || '',
+        url: r.url || '',
+        flags: r.flags || [],
+        isApplied: Boolean(r.is_applied),
+        isChecked: Boolean(r.is_checked),
+        isNotRequired: Boolean(r.is_not_required),
+        userCode: (r.user_codes || []).join(' '),
+        userCodes: r.user_codes || [],
+        statusDate: r.status_date || '',
+        username: r.username || 'Unknown',
+        updatedAt: r.updated_at
       }));
 
-      const { error: upsertErr } = await supabase
-        .from('tracked_jobs')
-        .upsert(rows, { onConflict: 'browser_session_id,job_id' });
-
-      if (upsertErr) throw upsertErr;
-
+      setTrackedJobs(unifiedJobs);
       setUploadStatus('success');
-      setUploadMessage(`✅ ${jobs.length} jobs uploaded to cloud successfully!`);
+      setUploadMessage(`✅ Synced! ${unifiedJobs.length} clean jobs in cloud. Local storage cleared.`);
     } catch (err) {
-      console.error('Upload error:', err);
+      console.error('Sync error:', err);
       setUploadStatus('error');
-      setUploadMessage(`❌ Upload failed: ${err.message || 'Unknown error'}`);
+      setUploadMessage(`❌ Sync failed: ${err.message || 'Unknown error'}`);
     }
   };
 
@@ -1156,15 +1308,15 @@ export default function App({ currentUser, onLogout }) {
             </div>
           </div>
 
-          {/* ─── Upload to Cloud Button (temporary migration) ─── */}
-          <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2">
+          {/* ─── Sync to Cloud & Clear Local Button (Permanent) ─── */}
+          <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2.5">
               <button
                 type="button"
                 onClick={uploadToSupabase}
-                disabled={uploadStatus === 'loading' || trackedJobs.length === 0}
-                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-white text-xs font-semibold rounded-lg shadow-sm disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-                title="Upload your current tracked jobs to the cloud database"
+                disabled={uploadStatus === 'loading'}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 active:scale-98 text-white text-xs font-bold rounded-xl shadow-xs disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                title="Sync all tracked jobs to the cloud database, eliminate duplicates across both PCs, and clear local browser cache"
               >
                 {uploadStatus === 'loading' ? (
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
@@ -1172,13 +1324,17 @@ export default function App({ currentUser, onLogout }) {
                   <CloudUpload className="w-3.5 h-3.5" />
                 )}
                 <span>
-                  {uploadStatus === 'loading' ? 'Uploading...' : `Upload My Data ☁️ (${trackedJobs.length} jobs)`}
+                  {uploadStatus === 'loading' ? 'Syncing with Cloud...' : `Sync to Cloud & Clear Local (${trackedJobs.length} jobs)`}
                 </span>
               </button>
-              <span className="text-[11px] text-slate-400 italic">Temporary — saves your local data to cloud</span>
+              <span className="text-[11px] text-slate-500 font-medium">
+                Uploads local data, deduplicates records across all PCs, and clears local browser cache.
+              </span>
             </div>
             {uploadMessage && (
-              <span className={`text-xs font-medium ${uploadStatus === 'success' ? 'text-emerald-600' : 'text-red-500'}`}>
+              <span className={`text-xs font-semibold px-2.5 py-1 rounded-lg ${
+                uploadStatus === 'success' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-red-50 text-red-700 border border-red-200'
+              }`}>
                 {uploadMessage}
               </span>
             )}
