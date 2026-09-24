@@ -680,10 +680,36 @@ export default function App({ currentUser, onLogout }) {
         return null;
       };
 
+      // Deduplicate local jobs by resolvedJobId first to prevent duplicate entries in the same batch
+      const dedupedLocal = new Map();
       localJobs.forEach(job => {
         const cloudMatch = findCloudMatch(job);
         const resolvedJobId = String(job.jobNumber || job.jobId || cloudMatch?.job_id || '');
         if (!resolvedJobId) return;
+
+        if (dedupedLocal.has(resolvedJobId)) {
+          const prev = dedupedLocal.get(resolvedJobId);
+          const mergedCodes = Array.from(new Set([
+            ...parseApplicantCodes(prev.userCode),
+            ...parseApplicantCodes(job.userCode)
+          ]));
+          dedupedLocal.set(resolvedJobId, {
+            ...prev,
+            ...job,
+            isApplied: prev.isApplied || job.isApplied,
+            isChecked: prev.isChecked || job.isChecked,
+            isNotRequired: (prev.isNotRequired || job.isNotRequired) && !(prev.isApplied || job.isApplied || prev.isChecked || job.isChecked),
+            userCode: mergedCodes.join(' '),
+            _cloudMatch: prev._cloudMatch || cloudMatch
+          });
+        } else {
+          dedupedLocal.set(resolvedJobId, { ...job, _cloudMatch: cloudMatch });
+        }
+      });
+
+      dedupedLocal.forEach(job => {
+        const cloudMatch = job._cloudMatch;
+        const resolvedJobId = String(job.jobNumber || job.jobId || cloudMatch?.job_id || '');
 
         const localCodes = parseApplicantCodes(job.userCode || '');
         const existingCodes = cloudMatch?.user_codes || [];
@@ -697,6 +723,7 @@ export default function App({ currentUser, onLogout }) {
         const bestUsername = currentUser?.username || cloudMatch?.username || 'Unknown';
 
         const row = {
+          id: cloudMatch?.id || crypto.randomUUID(),
           browser_session_id: cloudMatch?.browser_session_id || sessionId,
           username: bestUsername,
           user_id: null,
@@ -717,16 +744,12 @@ export default function App({ currentUser, onLogout }) {
           uploaded_at: new Date().toISOString(),
         };
 
-        if (cloudMatch?.id) {
-          row.id = cloudMatch.id;
-        }
-
         recordsToUpsert.push(row);
       });
 
-      // 3. Batch upsert merged records into Supabase
+      // 3. Batch upsert merged records into Supabase (50 per batch for maximum reliability)
       if (recordsToUpsert.length > 0) {
-        const chunkSize = 100;
+        const chunkSize = 50;
         for (let i = 0; i < recordsToUpsert.length; i += chunkSize) {
           const chunk = recordsToUpsert.slice(i, i + chunkSize);
           const { error: upsertErr } = await supabase
