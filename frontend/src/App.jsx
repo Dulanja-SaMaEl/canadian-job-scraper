@@ -683,7 +683,7 @@ export default function App({ currentUser, onLogout }) {
                 </div>
                 <input
                   type="text"
-                  className="block w-full pl-10 pr-9 py-2.5 text-sm border border-slate-300 rounded-xl bg-slate-50 placeholder-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all shadow-sm"
+                  className="block w-full pl-10 pr-9 py-2.5 text-sm text-slate-900 border border-slate-300 rounded-xl bg-slate-50 placeholder-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all shadow-sm"
                   placeholder="Job title, NOC code, or skill (e.g. Software, Nurse, Driver)..."
                   value={keyword}
                   onChange={(e) => setKeyword(e.target.value)}
