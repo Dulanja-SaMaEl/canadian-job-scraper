@@ -4,9 +4,10 @@ import {
   AlertCircle, CheckCircle, Download, ArrowDownUp, Phone, X, RefreshCw, 
   Briefcase, ChevronLeft, ChevronRight, Laptop, Sparkles, Check, Ban, Tag, 
   Edit3, CalendarDays, UserCheck, FileText, ArrowLeft, LogOut, User,
-  CloudUpload, Hash, Mail
+  CloudUpload, Hash, Mail, BarChart3
 } from 'lucide-react';
 import { supabase } from './supabaseClient';
+import ReportsPage from './ReportsPage';
 
 const CANADIAN_PROVINCES = [
   { code: '', label: 'All Canada' },
@@ -88,6 +89,7 @@ export default function App({ currentUser, onLogout }) {
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [activeView, setActiveView] = useState('search'); // 'search' | 'reports'
 
   // Tracked jobs with boolean status flags (migrated from old single-status format)
   const [trackedJobs, setTrackedJobs] = useState(() => {
@@ -664,13 +666,23 @@ export default function App({ currentUser, onLogout }) {
     setPage(1);
   };
 
+  if (activeView === 'reports') {
+    return (
+      <ReportsPage
+        localTrackedJobs={trackedJobs}
+        currentUser={currentUser}
+        onBackToSearch={() => setActiveView('search')}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 font-sans selection:bg-blue-200">
       {/* Top Navigation */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-20 shadow-sm backdrop-blur-md bg-white/95">
         <div className="max-w-6xl mx-auto px-4 py-3 sm:px-6 lg:px-8">
-          {/* Top Row: Logo & User Navigation */}
-          <div className="flex items-center justify-between gap-4 pb-3 border-b border-slate-100">
+          {/* Top Row: Logo, View Switcher & User Navigation */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
             {/* Logo and Brand */}
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-700 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-blue-500/20 shrink-0">
@@ -687,6 +699,39 @@ export default function App({ currentUser, onLogout }) {
                   Real-time search across government & employer postings
                 </p>
               </div>
+            </div>
+
+            {/* Navigation Tabs (Live Search vs Reports) */}
+            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs font-semibold self-start sm:self-auto">
+              <button
+                type="button"
+                onClick={() => setActiveView('search')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
+                  activeView === 'search'
+                    ? 'bg-white text-blue-600 shadow-2xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Search className="w-3.5 h-3.5" />
+                <span>Search Jobs</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveView('reports')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
+                  activeView === 'reports'
+                    ? 'bg-white text-blue-600 shadow-2xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <BarChart3 className="w-3.5 h-3.5 text-blue-600" />
+                <span>Reports & Analytics</span>
+                {trackedJobs.length > 0 && (
+                  <span className="px-1.5 py-0.2 rounded-full bg-blue-100 text-blue-800 text-[10px] font-bold">
+                    {trackedJobs.length}
+                  </span>
+                )}
+              </button>
             </div>
 
             {/* Desktop & Mobile Actions: Export + User Pill + Logout */}
