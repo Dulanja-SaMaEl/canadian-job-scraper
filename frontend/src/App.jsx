@@ -80,7 +80,7 @@ export default function App({ currentUser, onLogout }) {
   const debouncedKeyword = useDebounce(keyword, 350);
   const [searchQuery, setSearchQuery] = useState('');
   const [province, setProvince] = useState('');
-  const [internationalOnly, setInternationalOnly] = useState(false);
+  const [internationalOnly, setInternationalOnly] = useState(true);
   const [remoteOnly, setRemoteOnly] = useState(false);
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState('D');
@@ -840,13 +840,13 @@ export default function App({ currentUser, onLogout }) {
     }
   };
 
-  const hasActiveFilters = Boolean(searchQuery || province || internationalOnly || remoteOnly);
+  const hasActiveFilters = Boolean(searchQuery || province || remoteOnly);
 
   const resetAllFilters = () => {
     setKeyword('');
     setSearchQuery('');
     setProvince('');
-    setInternationalOnly(false);
+    setInternationalOnly(true);
     setRemoteOnly(false);
     setPage(1);
   };
@@ -1014,24 +1014,15 @@ export default function App({ currentUser, onLogout }) {
           {/* Filter Bar & Toggles */}
           <div className="flex flex-wrap items-center justify-between gap-3 mt-3 pt-3 border-t border-slate-100 text-xs">
             <div className="flex flex-wrap items-center gap-2">
-              {/* International vs All Jobs Toggle */}
-              <button
-                type="button"
-                onClick={() => {
-                  setInternationalOnly(!internationalOnly);
-                  setPage(1);
-                }}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full font-medium transition-all ${
-                  internationalOnly 
-                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300 ring-1 ring-emerald-400'
-                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200'
-                }`}
-                title="Filter for employers recruiting international candidates (LMIA eligible)"
+              {/* International vs All Jobs Badge (Permanently Selected & Locked) */}
+              <div
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full font-medium transition-all bg-emerald-100 text-emerald-800 border border-emerald-300 ring-1 ring-emerald-400 cursor-default select-none shadow-2xs"
+                title="Permanently selected: Showing jobs open to Canadians and International candidates (LMIA eligible)"
               >
                 <Globe2 className="w-3.5 h-3.5 text-emerald-600" />
                 <span>Canadians & International (LMIA)</span>
-                {internationalOnly && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>}
-              </button>
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+              </div>
 
               {/* Remote Only Toggle */}
               <button
@@ -1517,9 +1508,7 @@ export default function App({ currentUser, onLogout }) {
                 </div>
                 <h3 className="text-lg font-bold text-slate-900">No matching jobs found</h3>
                 <p className="mt-1.5 text-sm text-slate-500 max-w-md mx-auto">
-                  {internationalOnly 
-                    ? 'No international-eligible jobs found for this query. Try toggling "Canadians & International" off to search all 65,000+ Canadian jobs.'
-                    : 'Try adjusting your search keywords, clearing province filters, or searching for broader terms.'}
+                  No international-eligible (LMIA) jobs found for this query. Try adjusting your search keywords or clearing province filters.
                 </p>
 
                 <div className="mt-6 flex flex-wrap items-center justify-center gap-2 max-w-lg mx-auto">
