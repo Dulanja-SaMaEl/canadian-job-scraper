@@ -723,7 +723,6 @@ export default function App({ currentUser, onLogout }) {
         const bestUsername = currentUser?.username || cloudMatch?.username || 'Unknown';
 
         const row = {
-          id: cloudMatch?.id || crypto.randomUUID(),
           browser_session_id: cloudMatch?.browser_session_id || sessionId,
           username: bestUsername,
           user_id: null,
@@ -747,14 +746,14 @@ export default function App({ currentUser, onLogout }) {
         recordsToUpsert.push(row);
       });
 
-      // 3. Batch upsert merged records into Supabase (50 per batch for maximum reliability)
+      // 3. Batch upsert merged records into Supabase using unique job_id conflict target
       if (recordsToUpsert.length > 0) {
         const chunkSize = 50;
         for (let i = 0; i < recordsToUpsert.length; i += chunkSize) {
           const chunk = recordsToUpsert.slice(i, i + chunkSize);
           const { error: upsertErr } = await supabase
             .from('tracked_jobs')
-            .upsert(chunk, { onConflict: 'id' });
+            .upsert(chunk, { onConflict: 'job_id' });
           if (upsertErr) throw upsertErr;
         }
       }
