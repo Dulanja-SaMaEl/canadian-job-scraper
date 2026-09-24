@@ -49,10 +49,15 @@ function useDebounce(value, delay) {
   return debouncedValue;
 }
 
-// Parse applicant codes from any format: "CA596 CA3927", "CA596,CA3927", "CA596, CA3927", or "CA596"
+// Parse applicant codes from any format: "CA596 CA3927", ["CA596", "CA3927"], "CA596,CA3927", or numbers/arrays
 function parseApplicantCodes(rawCode) {
-  if (!rawCode || !rawCode.trim()) return [];
-  return rawCode.split(/[\s,]+/).map(c => c.trim().toUpperCase()).filter(Boolean);
+  if (!rawCode) return [];
+  if (Array.isArray(rawCode)) {
+    return rawCode.map(c => String(c || '').trim().toUpperCase()).filter(Boolean);
+  }
+  const str = String(rawCode).trim();
+  if (!str) return [];
+  return str.split(/[\s,]+/).map(c => c.trim().toUpperCase()).filter(Boolean);
 }
 
 // Migrate old single-status format to new boolean-flag format (zero data loss)
@@ -542,8 +547,8 @@ export default function App({ currentUser, onLogout }) {
   const uniqueApplicantCodes = Array.from(
     new Set(
       trackedJobs
-        .filter(j => j.isApplied && j.userCode && j.userCode.trim() !== '')
-        .flatMap(j => parseApplicantCodes(j.userCode))
+        .filter(j => j.isApplied)
+        .flatMap(j => parseApplicantCodes(j.userCode || j.userCodes))
     )
   ).sort();
 
