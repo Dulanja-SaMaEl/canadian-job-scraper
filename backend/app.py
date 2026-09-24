@@ -126,6 +126,21 @@ def parse_job_article(article):
             if source_text and source_text not in flags and len(source_text) < 30:
                 flags.append(source_text)
 
+        # Extract official Canadian Job Bank number (e.g. 3681248) from li.source
+        job_number = ""
+        source_li = article.select_one("li.source")
+        if source_li:
+            m_jn = re.search(r'(?:Job number:?|#)\s*(\d+)', source_li.get_text())
+            if not m_jn:
+                m_jn = re.search(r'\b(\d{6,10})\b', source_li.get_text())
+            if m_jn:
+                job_number = m_jn.group(1)
+
+        if not job_number:
+            m_fallback = re.search(r'Job\s*Bank\s*(?:Job\s*number:?|#)?\s*(\d{6,10})', article.get_text(), re.I)
+            if m_fallback:
+                job_number = m_fallback.group(1)
+
         # Validate that this is actually a job item
         if not url and not job_id:
             return None
@@ -134,6 +149,7 @@ def parse_job_article(article):
 
         return {
             "jobId": job_id,
+            "jobNumber": job_number or job_id,
             "title": title,
             "company": company,
             "location": location,
@@ -395,13 +411,33 @@ def get_job_details():
         else:
             info_string = "\n".join(unique_info)
 
-        return jsonify({"applyInfo": info_string})
+        # Extract official Canadian Job Bank number from job details page
+        jn_match = re.search(r'Job\s*Bank[\s\S]{0,100}#\s*(\d{6,10})', html_content, re.I)
+        if not jn_match:
+            jn_match = re.search(r'Job\s*(?:Bank)?\s*#\s*(\d{6,10})', html_content, re.I)
+        details_job_number = jn_match.group(1) if jn_match else None
+
+        has_cover_letter = bool(re.search(r'cover\s*letter', html_content, re.I))
+
+        return jsonify({
+            "applyInfo": info_string,
+            "jobNumber": details_job_number,
+            "hasCoverLetter": has_cover_letter
+        })
 
     except requests.exceptions.Timeout:
-        return jsonify({"applyInfo": "⏱ Job Bank took too long to respond. Click 'Apply' to visit the job page directly."})
+        return jsonify({
+            "applyInfo": "⏱ Job Bank took too long to respond. Click 'Apply' to visit the job page directly.",
+            "jobNumber": None,
+            "hasCoverLetter": False
+        })
     except Exception as e:
         print(f"Error fetching job details: {e}")
-        return jsonify({"applyInfo": "Could not load contact info. Click 'Apply' to visit the job page."})
+        return jsonify({
+            "applyInfo": "Could not load contact info. Click 'Apply' to visit the job page.",
+            "jobNumber": None,
+            "hasCoverLetter": False
+        })
 
 
 if __name__ == '__main__':

@@ -427,7 +427,7 @@ export default function App({ currentUser, onLogout }) {
     const csvRows = [
       headers.join(','),
       ...exportFilteredJobs.map(job => [
-        `"${job.jobId || ''}"`,
+        `"${job.jobNumber || job.jobId || ''}"`,
         `"${(job.title || '').replace(/"/g, '""')}"`,
         `"${(job.company || '').replace(/"/g, '""')}"`,
         `"${(job.location || '').replace(/"/g, '""')}"`,
@@ -490,12 +490,14 @@ export default function App({ currentUser, onLogout }) {
       headers.join(','),
       ...jobsToExport.map(job => {
         const jobContact = contactInfo[job.jobId];
-        const hasCoverLetter = jobContact?.data
-          ? jobContact.data.toLowerCase().includes('cover letter')
-          : '';
+        const hasCoverLetter = jobContact?.hasCoverLetter !== undefined
+          ? jobContact.hasCoverLetter
+          : (jobContact?.data
+            ? jobContact.data.toLowerCase().includes('cover letter')
+            : '');
         return [
           `"${(job.userCode || trimmed).replace(/"/g, '""')}"`,
-          `"${job.jobId || ''}"`,
+          `"${job.jobNumber || job.jobId || ''}"`,
           `"${(job.title || '').replace(/"/g, '""')}"`,
           `"${(job.company || '').replace(/"/g, '""')}"`,
           `"${(job.location || '').replace(/"/g, '""')}"`,
@@ -529,7 +531,34 @@ export default function App({ currentUser, onLogout }) {
       const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
       const response = await fetch(`${apiUrl}/job-details?url=${encodeURIComponent(jobUrl)}`);
       const data = await response.json();
-      setContactInfo(prev => ({ ...prev, [jobId]: { loading: false, data: data.applyInfo } }));
+      setContactInfo(prev => ({
+        ...prev,
+        [jobId]: {
+          loading: false,
+          data: data.applyInfo,
+          jobNumber: data.jobNumber,
+          hasCoverLetter: data.hasCoverLetter,
+        }
+      }));
+
+      // If official Job Bank number was retrieved, ensure it is recorded on the tracked job
+      if (data.jobNumber) {
+        setTrackedJobs(prev => {
+          let changed = false;
+          const updated = prev.map(j => {
+            if (j.jobId === jobId && (!j.jobNumber || j.jobNumber !== data.jobNumber)) {
+              changed = true;
+              return { ...j, jobNumber: data.jobNumber };
+            }
+            return j;
+          });
+          if (changed) {
+            persistJobs(updated);
+            return updated;
+          }
+          return prev;
+        });
+      }
     } catch (fetchErr) {
       setContactInfo(prev => ({
         ...prev,
@@ -562,8 +591,8 @@ export default function App({ currentUser, onLogout }) {
       const rows = jobs.map(job => ({
         browser_session_id: sessionId,
         username: currentUser?.username || null,
-        user_id: null, // we don't store user UUID in localStorage session currently
-        job_id: job.jobId,
+        user_id: null,
+        job_id: job.jobNumber || job.jobId,
         title: job.title || null,
         company: job.company || null,
         location: job.location || null,
@@ -1287,9 +1316,12 @@ export default function App({ currentUser, onLogout }) {
               const jobIsChecked = trackedJob?.isChecked || false;
               const jobIsNotRequired = trackedJob?.isNotRequired || false;
               const jobContact = contactInfo[job.jobId];
-              const hasCoverLetter = jobContact?.data
-                ? jobContact.data.toLowerCase().includes('cover letter')
-                : false;
+              const displayJobNumber = trackedJob?.jobNumber || job.jobNumber || jobContact?.jobNumber || job.jobId;
+              const hasCoverLetter = jobContact?.hasCoverLetter !== undefined
+                ? jobContact.hasCoverLetter
+                : (jobContact?.data
+                  ? jobContact.data.toLowerCase().includes('cover letter')
+                  : false);
 
               // Card border styling: applied takes priority, then checked, then not-required
               // Both applied+checked shows the emerald border with blue tint
@@ -1313,10 +1345,10 @@ export default function App({ currentUser, onLogout }) {
                       {/* Top Row: Job ID + Flags + Cover Letter badge */}
                       <div className="flex flex-wrap items-center gap-1.5">
                         {/* Job ID badge */}
-                        {job.jobId && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold bg-slate-100 text-slate-500 border border-slate-200">
+                        {displayJobNumber && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold bg-slate-100 text-slate-500 border border-slate-200" title={`Job Bank #${displayJobNumber}`}>
                             <Hash className="w-3 h-3" />
-                            {job.jobId}
+                            {displayJobNumber}
                           </span>
                         )}
 
