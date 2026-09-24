@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   Search, MapPin, Building2, Banknote, Calendar, ExternalLink, Globe2, 
   AlertCircle, CheckCircle, Download, ArrowDownUp, Phone, X, RefreshCw, 
