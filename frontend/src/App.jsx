@@ -6,7 +6,7 @@ import {
   Edit3, CalendarDays, UserCheck, FileText, ArrowLeft, LogOut, User,
   CloudUpload, Hash, Mail, BarChart3
 } from 'lucide-react';
-import { supabase } from './supabaseClient';
+import { supabase, fetchAllTrackedJobs } from './supabaseClient';
 import ReportsPage from './ReportsPage';
 
 const CANADIAN_PROVINCES = [
@@ -231,16 +231,14 @@ export default function App({ currentUser, onLogout }) {
     };
   }, [fetchJobs]);
 
-  // On mount: fetch latest tracked jobs from Supabase to stay in sync across all PCs
+  const [syncedJobIds, setSyncedJobIds] = useState(() => new Set());
+
+  // On mount: fetch all tracked jobs from Supabase across all pages to stay in sync across all PCs
   useEffect(() => {
     const fetchLatestFromCloud = async () => {
       try {
-        const { data, error } = await supabase
-          .from('tracked_jobs')
-          .select('*')
-          .order('updated_at', { ascending: false });
+        const data = await fetchAllTrackedJobs();
 
-        if (error) throw error;
         if (data && data.length > 0) {
           const cloudUnified = data.map(r => ({
             jobId: r.job_id,
@@ -261,6 +259,8 @@ export default function App({ currentUser, onLogout }) {
             username: r.username || 'Unknown',
             updatedAt: r.updated_at
           }));
+
+          setSyncedJobIds(new Set(cloudUnified.map(j => String(j.jobId))));
 
           setTrackedJobs(prev => {
             const map = new Map();
@@ -296,6 +296,21 @@ export default function App({ currentUser, onLogout }) {
     fetchLatestFromCloud();
   }, []);
 
+  const unsyncedJobsCount = useMemo(() => {
+    return trackedJobs.filter(j => !syncedJobIds.has(String(j.jobNumber || j.jobId))).length;
+  }, [trackedJobs, syncedJobIds]);
+
+  const markUnsynced = (jobId) => {
+    if (!jobId) return;
+    setSyncedJobIds(prev => {
+      const idStr = String(jobId);
+      if (!prev.has(idStr)) return prev;
+      const next = new Set(prev);
+      next.delete(idStr);
+      return next;
+    });
+  };
+
   // ─────────────────────────────────────────────────────────────────────
   // STATUS COUNTS (boolean flags)
   // ─────────────────────────────────────────────────────────────────────
@@ -320,6 +335,7 @@ export default function App({ currentUser, onLogout }) {
   // TOGGLE CHECKED (independent — coexists with Applied)
   // ─────────────────────────────────────────────────────────────────────
   const toggleChecked = (job) => {
+    markUnsynced(job.jobNumber || job.jobId);
     setTrackedJobs(prev => {
       const existing = prev.find(j => j.jobId === job.jobId);
       const todayStr = new Date().toISOString().split('T')[0];
@@ -359,6 +375,7 @@ export default function App({ currentUser, onLogout }) {
   // TOGGLE NOT REQUIRED (exclusive — clears applied & checked)
   // ─────────────────────────────────────────────────────────────────────
   const toggleNotRequired = (job) => {
+    markUnsynced(job.jobNumber || job.jobId);
     setTrackedJobs(prev => {
       const existing = prev.find(j => j.jobId === job.jobId);
       const todayStr = new Date().toISOString().split('T')[0];
@@ -412,6 +429,7 @@ export default function App({ currentUser, onLogout }) {
     if (e) e.preventDefault();
     if (!appliedModalJob) return;
 
+    markUnsynced(appliedModalJob.jobNumber || appliedModalJob.jobId);
     setTrackedJobs(prev => {
       const existing = prev.find(j => j.jobId === appliedModalJob.jobId);
       const todayStr = new Date().toISOString().split('T')[0];
@@ -448,6 +466,7 @@ export default function App({ currentUser, onLogout }) {
 
   const handleRemoveAppliedFromModal = () => {
     if (!appliedModalJob) return;
+    markUnsynced(appliedModalJob.jobNumber || appliedModalJob.jobId);
     setTrackedJobs(prev => {
       const existing = prev.find(j => j.jobId === appliedModalJob.jobId);
       let updated;
@@ -620,6 +639,7 @@ export default function App({ currentUser, onLogout }) {
             return j;
           });
           if (changed) {
+            markUnsynced(data.jobNumber || jobId);
             persistJobs(updated);
             return updated;
           }
@@ -647,13 +667,8 @@ export default function App({ currentUser, onLogout }) {
         localStorage.setItem('browserSessionId', sessionId);
       }
 
-      // 1. Fetch current cloud records to check for duplicates & merge fields
-      const { data: cloudData, error: fetchErr } = await supabase
-        .from('tracked_jobs')
-        .select('*');
-
-      if (fetchErr) throw fetchErr;
-      const existingCloudRows = cloudData || [];
+      // 1. Fetch current cloud records across all pages to check for duplicates & merge fields
+      const existingCloudRows = await fetchAllTrackedJobs();
 
       // Create lookup maps by job_id and cleaned URL
       const cloudByJobId = new Map();
@@ -762,13 +777,8 @@ export default function App({ currentUser, onLogout }) {
       localStorage.removeItem('trackedJobs');
       localStorage.removeItem('appliedJobs');
 
-      // 5. Fetch fresh unified cloud records & update state so UI stays active
-      const { data: freshData, error: refreshErr } = await supabase
-        .from('tracked_jobs')
-        .select('*')
-        .order('updated_at', { ascending: false });
-
-      if (refreshErr) throw refreshErr;
+      // 5. Fetch fresh unified cloud records across all pages & update state
+      const freshData = await fetchAllTrackedJobs();
 
       const unifiedJobs = (freshData || []).map(r => ({
         jobId: r.job_id,
@@ -790,9 +800,10 @@ export default function App({ currentUser, onLogout }) {
         updatedAt: r.updated_at
       }));
 
+      setSyncedJobIds(new Set(freshData.map(r => String(r.job_id))));
       setTrackedJobs(unifiedJobs);
       setUploadStatus('success');
-      setUploadMessage(`✅ Synced! ${unifiedJobs.length} clean jobs in cloud. Local storage cleared.`);
+      setUploadMessage(`✅ Synced! All ${unifiedJobs.length} records verified in cloud. Local cache cleared.`);
     } catch (err) {
       console.error('Sync error:', err);
       setUploadStatus('error');
@@ -1337,20 +1348,36 @@ export default function App({ currentUser, onLogout }) {
                 type="button"
                 onClick={uploadToSupabase}
                 disabled={uploadStatus === 'loading'}
-                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 active:scale-98 text-white text-xs font-bold rounded-xl shadow-xs disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-                title="Sync all tracked jobs to the cloud database, eliminate duplicates across both PCs, and clear local browser cache"
+                className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-xl shadow-xs transition-all active:scale-98 disabled:opacity-50 disabled:cursor-not-allowed ${
+                  unsyncedJobsCount > 0
+                    ? 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white'
+                    : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200'
+                }`}
+                title={
+                  unsyncedJobsCount > 0
+                    ? `Sync ${unsyncedJobsCount} unsynced local job(s) to cloud database and clear local cache`
+                    : `All ${trackedJobs.length} records are permanently in sync with cloud DB. Click to force refresh/verify.`
+                }
               >
                 {uploadStatus === 'loading' ? (
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                ) : (
+                ) : unsyncedJobsCount > 0 ? (
                   <CloudUpload className="w-3.5 h-3.5" />
+                ) : (
+                  <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
                 )}
                 <span>
-                  {uploadStatus === 'loading' ? 'Syncing with Cloud...' : `Sync to Cloud & Clear Local (${trackedJobs.length} jobs)`}
+                  {uploadStatus === 'loading'
+                    ? 'Syncing with Cloud...'
+                    : unsyncedJobsCount > 0
+                      ? `Sync to Cloud & Clear Local (${unsyncedJobsCount} unsynced)`
+                      : `✓ Cloud in Sync (${trackedJobs.length} jobs)`}
                 </span>
               </button>
               <span className="text-[11px] text-slate-500 font-medium">
-                Uploads local data, deduplicates records across all PCs, and clears local browser cache.
+                {unsyncedJobsCount > 0
+                  ? `${unsyncedJobsCount} local change(s) pending sync to cloud DB.`
+                  : `All ${trackedJobs.length} tracked jobs are permanently synced to cloud DB.`}
               </span>
             </div>
             {uploadMessage && (

@@ -5,7 +5,7 @@ import {
   Tag, ExternalLink, FileSpreadsheet, ChevronLeft, ChevronRight, X, 
   Building2, MapPin, User, Cloud, HardDrive, ArrowLeft, Briefcase, Hash
 } from 'lucide-react';
-import { supabase } from './supabaseClient';
+import { supabase, fetchAllTrackedJobs } from './supabaseClient';
 
 // Helper to parse applicant codes from any raw text format
 function parseApplicantCodes(rawCode) {
@@ -14,7 +14,7 @@ function parseApplicantCodes(rawCode) {
 }
 
 export default function ReportsPage({ localTrackedJobs, currentUser, onBackToSearch }) {
-  // Data source: 'all' (cloud + local merged), 'cloud', 'local'
+  // Data source: 'all' (cloud + unsynced local), 'cloud', 'local' (unsynced local only)
   const [dataSource, setDataSource] = useState('all');
   const [cloudJobs, setCloudJobs] = useState([]);
   const [loadingCloud, setLoadingCloud] = useState(false);
@@ -39,17 +39,12 @@ export default function ReportsPage({ localTrackedJobs, currentUser, onBackToSea
   // Active chart tab: 'overview' | 'applicants' | 'users' | 'timeline'
   const [chartView, setChartView] = useState('overview');
 
-  // Fetch cloud data from Supabase
+  // Fetch complete cloud data from Supabase using paginated fetch
   const fetchCloudJobs = async () => {
     setLoadingCloud(true);
     setCloudError(null);
     try {
-      const { data, error } = await supabase
-        .from('tracked_jobs')
-        .select('*')
-        .order('updated_at', { ascending: false });
-
-      if (error) throw error;
+      const data = await fetchAllTrackedJobs();
 
       const normalized = (data || []).map(row => ({
         id: row.id,
@@ -85,32 +80,36 @@ export default function ReportsPage({ localTrackedJobs, currentUser, onBackToSea
     fetchCloudJobs();
   }, []);
 
+  // Compute truly unsynced local jobs (jobs in local state not yet in cloud)
+  const unsyncedLocalJobs = useMemo(() => {
+    const cloudIds = new Set(cloudJobs.map(j => String(j.jobId)));
+    return (localTrackedJobs || [])
+      .filter(j => !cloudIds.has(String(j.jobNumber || j.jobId)))
+      .map(j => ({
+        ...j,
+        jobNumber: j.jobNumber || j.jobId,
+        username: currentUser?.username || 'Current Device',
+        userCodes: parseApplicantCodes(j.userCode || ''),
+        source: 'local'
+      }));
+  }, [localTrackedJobs, cloudJobs, currentUser]);
+
   // Merge datasets according to selected data source
   const allJobs = useMemo(() => {
-    const localNormalized = (localTrackedJobs || []).map(j => ({
-      ...j,
-      jobNumber: j.jobNumber || j.jobId,
-      username: currentUser?.username || 'Current Device',
-      userCodes: parseApplicantCodes(j.userCode || ''),
-      source: 'local'
-    }));
-
-    if (dataSource === 'local') return localNormalized;
+    if (dataSource === 'local') return unsyncedLocalJobs;
     if (dataSource === 'cloud') return cloudJobs;
 
-    // 'all': Merge cloud + local (deduplicate by jobId, cloud has username history)
+    // 'all': Cloud master + any unsynced local items
     const map = new Map();
-    // Put cloud items first
     cloudJobs.forEach(j => map.set(j.jobId, j));
-    // Overlay local items
-    localNormalized.forEach(j => {
+    unsyncedLocalJobs.forEach(j => {
       if (!map.has(j.jobId)) {
         map.set(j.jobId, j);
       }
     });
 
     return Array.from(map.values());
-  }, [localTrackedJobs, cloudJobs, dataSource, currentUser]);
+  }, [unsyncedLocalJobs, cloudJobs, dataSource]);
 
   // Extract unique users
   const uniqueUsers = useMemo(() => {
@@ -386,10 +385,10 @@ export default function ReportsPage({ localTrackedJobs, currentUser, onBackToSea
                       ? 'bg-white text-blue-700 shadow-2xs font-bold' 
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
-                  title="View records stored in this browser only"
+                  title="View records stored in this browser that have not been synced to the cloud"
                 >
                   <HardDrive className="w-3 h-3 text-slate-600" />
-                  <span>Local ({(localTrackedJobs || []).length})</span>
+                  <span>Unsynced Local ({unsyncedLocalJobs.length})</span>
                 </button>
               </div>
 
