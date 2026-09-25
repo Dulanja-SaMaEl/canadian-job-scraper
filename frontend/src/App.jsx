@@ -130,6 +130,7 @@ export default function App({ currentUser, onLogout }) {
   const [appliedModalJob, setAppliedModalJob] = useState(null);
   const [modalUserCode, setModalUserCode] = useState('');
   const [modalStatusDate, setModalStatusDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [previousModalDate, setPreviousModalDate] = useState('');
 
   // Date range & status filter for Export
   const [exportStartDate, setExportStartDate] = useState('');
@@ -427,12 +428,26 @@ export default function App({ currentUser, onLogout }) {
     const todayStr = new Date().toISOString().split('T')[0];
     setAppliedModalJob(job);
     setModalUserCode(existing?.userCode || '');
-    setModalStatusDate(existing?.statusDate || todayStr);
+
+    const existingDate = existing?.statusDate || '';
+    const hasExistingCodes = Boolean(existing?.userCode && existing.userCode.trim().length > 0);
+
+    // Smart Auto-Date:
+    // If brand new, OR previously uncoded (None/empty code), OR previous date is in the past,
+    // default to TODAY so applications made today always get today's timestamp.
+    if (!existing || !hasExistingCodes || (existingDate && existingDate < todayStr)) {
+      setModalStatusDate(todayStr);
+      setPreviousModalDate(existingDate && existingDate !== todayStr ? existingDate : '');
+    } else {
+      setModalStatusDate(existingDate || todayStr);
+      setPreviousModalDate('');
+    }
   };
 
   const closeAppliedModal = () => {
     setAppliedModalJob(null);
     setModalUserCode('');
+    setPreviousModalDate('');
   };
 
   const handleSaveAppliedModal = (e) => {
@@ -1925,16 +1940,39 @@ export default function App({ currentUser, onLogout }) {
 
               {/* Status Date Input */}
               <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
-                  <CalendarDays className="w-3.5 h-3.5 text-blue-600" />
-                  <span>Application Date</span>
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                    <CalendarDays className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Application Date</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setModalStatusDate(new Date().toISOString().split('T')[0])}
+                    className="text-[11px] font-bold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded-md transition-colors"
+                  >
+                    Set to Today
+                  </button>
+                </div>
                 <input
                   type="date"
                   value={modalStatusDate}
                   onChange={(e) => setModalStatusDate(e.target.value)}
-                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-sm text-slate-700 focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all cursor-pointer"
+                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium text-slate-800 focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all cursor-pointer"
                 />
+                {previousModalDate && modalStatusDate !== previousModalDate && (
+                  <div className="mt-1.5 flex items-center justify-between text-[11px] bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-2.5 py-1">
+                    <span>
+                      ⚡ Auto-set to Today (Previous date was: <strong>{previousModalDate}</strong>)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setModalStatusDate(previousModalDate)}
+                      className="font-bold underline text-amber-900 hover:text-amber-950 ml-2"
+                    >
+                      Revert
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Action Buttons */}
