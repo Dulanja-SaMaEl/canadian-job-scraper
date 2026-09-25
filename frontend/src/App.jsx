@@ -280,6 +280,9 @@ export default function App({ currentUser, onLogout }) {
                 map.set(localJ.jobId, {
                   ...cloudJ,
                   ...localJ,
+                  username: (cloudJ.username && cloudJ.username !== 'Unknown')
+                    ? cloudJ.username
+                    : (localJ.username || currentUser?.username || 'Unknown'),
                   isApplied: cloudJ.isApplied || localJ.isApplied,
                   isChecked: cloudJ.isChecked || localJ.isChecked,
                   isNotRequired: (cloudJ.isNotRequired || localJ.isNotRequired) && !(cloudJ.isApplied || localJ.isApplied || cloudJ.isChecked || localJ.isChecked),
@@ -362,6 +365,7 @@ export default function App({ currentUser, onLogout }) {
       } else {
         updated = [...prev, {
           ...job,
+          username: currentUser?.username || 'Unknown',
           isApplied: false,
           isChecked: true,
           isNotRequired: false,
@@ -400,6 +404,7 @@ export default function App({ currentUser, onLogout }) {
       } else {
         updated = [...prev, {
           ...job,
+          username: currentUser?.username || 'Unknown',
           isApplied: false,
           isChecked: false,
           isNotRequired: true,
@@ -453,6 +458,7 @@ export default function App({ currentUser, onLogout }) {
       } else {
         updated = [...prev, {
           ...appliedModalJob,
+          username: currentUser?.username || 'Unknown',
           isApplied: true,
           isChecked: false,
           isNotRequired: false,
@@ -740,7 +746,14 @@ export default function App({ currentUser, onLogout }) {
         const mergedNotRequired = (job.isNotRequired || cloudMatch?.is_not_required) && !mergedApplied && !mergedChecked;
 
         const bestStatusDate = job.statusDate || cloudMatch?.status_date || new Date().toISOString().split('T')[0];
-        const bestUsername = currentUser?.username || cloudMatch?.username || 'Unknown';
+        // CRITICAL: Preserve existing author of the job!
+        // If the job already has an author in cloud (cloudMatch), keep that author.
+        // Only assign currentUser if the job is newly created (no cloudMatch) or previously Unknown.
+        const bestUsername = (cloudMatch?.username && cloudMatch.username !== 'Unknown')
+          ? cloudMatch.username
+          : (job.username && job.username !== 'Unknown')
+            ? job.username
+            : (currentUser?.username || 'Unknown');
 
         const row = {
           browser_session_id: cloudMatch?.browser_session_id || sessionId,

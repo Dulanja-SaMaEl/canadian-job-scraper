@@ -817,9 +817,12 @@ export default function ReportsPage({ localTrackedJobs, currentUser, onBackToSea
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-medium text-slate-700 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 cursor-pointer"
               >
                 <option value="all">All Users ({uniqueUsers.length})</option>
-                {uniqueUsers.map(u => (
-                  <option key={u} value={u}>Saved by: {u}</option>
-                ))}
+                {uniqueUsers.map(u => {
+                  const count = allJobs.filter(j => j.username === u).length;
+                  return (
+                    <option key={u} value={u}>Saved by: {u} ({count})</option>
+                  );
+                })}
               </select>
             </div>
 
