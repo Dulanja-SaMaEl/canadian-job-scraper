@@ -7,10 +7,24 @@ import {
 } from 'lucide-react';
 import { supabase, fetchAllTrackedJobs } from './supabaseClient';
 
-// Helper to parse applicant codes from any raw text format
+// Helper to parse applicant codes from any format: strings, arrays, slashes, commas, spaces
 function parseApplicantCodes(rawCode) {
-  if (!rawCode || !rawCode.trim()) return [];
-  return rawCode.split(/[\s,]+/).map(c => c.trim().toUpperCase()).filter(Boolean);
+  if (!rawCode) return [];
+  if (Array.isArray(rawCode)) {
+    return rawCode.flatMap(c => parseApplicantCodes(c));
+  }
+  const str = String(rawCode).trim();
+  if (!str) return [];
+  return str.split(/[\s,/|;]+/).map(c => c.trim().toUpperCase()).filter(Boolean);
+}
+
+// Derive a clean, human-readable status text from job boolean flags
+function getJobStatusText(job) {
+  if (job.isApplied && job.isChecked) return 'APPLIED + CHECKED';
+  if (job.isApplied) return 'APPLIED';
+  if (job.isChecked) return 'CHECKED';
+  if (job.isNotRequired) return 'NOT REQUIRED';
+  return 'UNSPECIFIED';
 }
 
 export default function ReportsPage({ localTrackedJobs, currentUser, onBackToSearch }) {
@@ -46,26 +60,29 @@ export default function ReportsPage({ localTrackedJobs, currentUser, onBackToSea
     try {
       const data = await fetchAllTrackedJobs();
 
-      const normalized = (data || []).map(row => ({
-        id: row.id,
-        jobId: row.job_id,
-        jobNumber: row.job_id,
-        title: row.title || 'Untitled Job',
-        company: row.company || 'Unknown Company',
-        location: row.location || 'Canada',
-        salary: row.salary || 'Not listed',
-        datePosted: row.date_posted || '',
-        url: row.url || '',
-        isApplied: Boolean(row.is_applied),
-        isChecked: Boolean(row.is_checked),
-        isNotRequired: Boolean(row.is_not_required),
-        userCodes: row.user_codes || [],
-        userCode: (row.user_codes || []).join(' '),
-        statusDate: row.status_date || (row.updated_at ? row.updated_at.split('T')[0] : ''),
-        username: row.username || 'Anonymous',
-        updatedAt: row.updated_at,
-        source: 'cloud'
-      }));
+      const normalized = (data || []).map(row => {
+        const parsedCodes = parseApplicantCodes(row.user_codes);
+        return {
+          id: row.id,
+          jobId: row.job_id,
+          jobNumber: row.job_id,
+          title: row.title || 'Untitled Job',
+          company: row.company || 'Unknown Company',
+          location: row.location || 'Canada',
+          salary: row.salary || 'Not listed',
+          datePosted: row.date_posted || '',
+          url: row.url || '',
+          isApplied: Boolean(row.is_applied),
+          isChecked: Boolean(row.is_checked),
+          isNotRequired: Boolean(row.is_not_required),
+          userCodes: parsedCodes,
+          userCode: parsedCodes.join(' '),
+          statusDate: row.status_date || (row.updated_at ? row.updated_at.split('T')[0] : ''),
+          username: row.username || 'Anonymous',
+          updatedAt: row.updated_at,
+          source: 'cloud'
+        };
+      });
 
       setCloudJobs(normalized);
     } catch (err) {
@@ -85,13 +102,17 @@ export default function ReportsPage({ localTrackedJobs, currentUser, onBackToSea
     const cloudIds = new Set(cloudJobs.map(j => String(j.jobId)));
     return (localTrackedJobs || [])
       .filter(j => !cloudIds.has(String(j.jobNumber || j.jobId)))
-      .map(j => ({
-        ...j,
-        jobNumber: j.jobNumber || j.jobId,
-        username: currentUser?.username || 'Current Device',
-        userCodes: parseApplicantCodes(j.userCode || ''),
-        source: 'local'
-      }));
+      .map(j => {
+        const parsedCodes = parseApplicantCodes(j.userCode || j.userCodes || '');
+        return {
+          ...j,
+          jobNumber: j.jobNumber || j.jobId,
+          username: currentUser?.username || 'Current Device',
+          userCodes: parsedCodes,
+          userCode: parsedCodes.join(' '),
+          source: 'local'
+        };
+      });
   }, [localTrackedJobs, cloudJobs, currentUser]);
 
   // Merge datasets according to selected data source
@@ -156,25 +177,48 @@ export default function ReportsPage({ localTrackedJobs, currentUser, onBackToSea
         if (!codes.includes(applicantFilter.toUpperCase())) return false;
       }
 
-      // Date Range
-      const d = job.statusDate || '';
-      if (startDate && d && d < startDate) return false;
-      if (endDate && d && d > endDate) return false;
+      // Date Range (strict: exclude records missing date if range is set)
+      const d = job.statusDate || (job.updatedAt ? job.updatedAt.split('T')[0] : '');
+      if (startDate && (!d || d < startDate)) return false;
+      if (endDate && (!d || d > endDate)) return false;
 
       return true;
     });
   }, [allJobs, searchQuery, statusFilter, userFilter, applicantFilter, startDate, endDate]);
 
-  // Sorted dataset
+  // Sorted dataset with smart multi-type sorting
   const sortedJobs = useMemo(() => {
     return [...filteredJobs].sort((a, b) => {
+      // 1. Numeric sorting for Job ID / Job Number
+      if (sortField === 'jobId' || sortField === 'jobNumber') {
+        const numA = Number(String(a.jobNumber || a.jobId || '').replace(/\D/g, ''));
+        const numB = Number(String(b.jobNumber || b.jobId || '').replace(/\D/g, ''));
+        if (!isNaN(numA) && !isNaN(numB) && numA !== numB) {
+          return sortDirection === 'asc' ? numA - numB : numB - numA;
+        }
+      }
+
+      // 2. Status text sorting
+      if (sortField === 'status' || sortField === 'isApplied') {
+        const statusA = getJobStatusText(a);
+        const statusB = getJobStatusText(b);
+        if (statusA < statusB) return sortDirection === 'asc' ? -1 : 1;
+        if (statusA > statusB) return sortDirection === 'asc' ? 1 : -1;
+        return 0;
+      }
+
+      // 3. Date sorting (statusDate falling back to updatedAt)
+      if (sortField === 'statusDate') {
+        const dateA = a.statusDate || a.updatedAt || '';
+        const dateB = b.statusDate || b.updatedAt || '';
+        if (dateA < dateB) return sortDirection === 'asc' ? -1 : 1;
+        if (dateA > dateB) return sortDirection === 'asc' ? 1 : -1;
+        return 0;
+      }
+
+      // 4. Default string sorting
       let valA = a[sortField] || '';
       let valB = b[sortField] || '';
-
-      if (sortField === 'statusDate') {
-        valA = a.statusDate || a.updatedAt || '';
-        valB = b.statusDate || b.updatedAt || '';
-      }
 
       if (typeof valA === 'string') valA = valA.toLowerCase();
       if (typeof valB === 'string') valB = valB.toLowerCase();
@@ -235,21 +279,13 @@ export default function ReportsPage({ localTrackedJobs, currentUser, onBackToSea
     return { total, applied, checked, notRequired, both, applicantCounts, userCounts, dateCounts };
   }, [filteredJobs]);
 
-  // Export to CSV
+  // Export to CSV with Excel UTF-8 BOM
   const handleExportCsv = () => {
     if (sortedJobs.length === 0) return;
     const headers = [
       'Job Number', 'Job Title', 'Company', 'Location', 'Salary', 
       'Date Posted', 'Status', 'Applicant Codes', 'Status Date', 'Saved By User', 'Job URL'
     ];
-
-    const getStatusText = (j) => {
-      if (j.isApplied && j.isChecked) return 'APPLIED + CHECKED';
-      if (j.isApplied) return 'APPLIED';
-      if (j.isChecked) return 'CHECKED';
-      if (j.isNotRequired) return 'NOT REQUIRED';
-      return 'UNSPECIFIED';
-    };
 
     const rows = sortedJobs.map(job => [
       `"${job.jobNumber || job.jobId || ''}"`,
@@ -258,14 +294,14 @@ export default function ReportsPage({ localTrackedJobs, currentUser, onBackToSea
       `"${(job.location || '').replace(/"/g, '""')}"`,
       `"${(job.salary || '').replace(/"/g, '""')}"`,
       `"${(job.datePosted || '').replace(/"/g, '""')}"`,
-      `"${getStatusText(job)}"`,
-      `"${(job.userCode || '').replace(/"/g, '""')}"`,
+      `"${getJobStatusText(job)}"`,
+      `"${(job.userCode || (job.userCodes || []).join(' ')).replace(/"/g, '""')}"`,
       `"${job.statusDate || ''}"`,
       `"${(job.username || '').replace(/"/g, '""')}"`,
       `"${job.url || ''}"`
     ]);
 
-    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(r => r.join(','))].join('\r\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -326,22 +362,28 @@ export default function ReportsPage({ localTrackedJobs, currentUser, onBackToSea
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 pb-16">
       {/* Top Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs print:static print:border-none print:shadow-none">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <button
                 onClick={onBackToSearch}
-                className="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition-colors border border-slate-200"
+                className="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition-colors border border-slate-200 print:hidden"
                 title="Back to Live Job Search"
               >
                 <ArrowLeft className="w-4 h-4" />
               </button>
               <div>
-                <h1 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
-                  <BarChart3 className="w-5 h-5 text-blue-600" />
-                  Analytics & Reports Dashboard
-                </h1>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h1 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+                    <BarChart3 className="w-5 h-5 text-blue-600" />
+                    Analytics & Reports Dashboard
+                  </h1>
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-2xs">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span>Live DB: {cloudJobs.length} records</span>
+                  </span>
+                </div>
                 <p className="text-xs text-slate-500">
                   Full visibility into tracked jobs, applicant codes, team activity, and exports
                 </p>
@@ -349,7 +391,7 @@ export default function ReportsPage({ localTrackedJobs, currentUser, onBackToSea
             </div>
 
             {/* Actions: Source switcher + Sync + Export + Print */}
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 print:hidden">
               {/* Data source toggle */}
               <div className="inline-flex rounded-xl bg-slate-100 p-0.5 border border-slate-200 text-xs font-semibold">
                 <button
@@ -497,12 +539,14 @@ export default function ReportsPage({ localTrackedJobs, currentUser, onBackToSea
 
           {/* Unique Applicants */}
           <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Applicants</span>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-purple-700">Applicants</span>
             <div className="mt-1 flex items-baseline justify-between">
-              <span className="text-2xl font-black text-purple-700">{uniqueApplicantCodes.length}</span>
+              <span className="text-2xl font-black text-purple-700">{Object.keys(stats.applicantCounts).length}</span>
               <Users className="w-4 h-4 text-purple-500" />
             </div>
-            <span className="text-[11px] text-purple-600 font-medium mt-1 block">{uniqueUsers.length} team members</span>
+            <span className="text-[11px] text-purple-600 font-medium mt-1 block">
+              {Object.keys(stats.userCounts).length} active {Object.keys(stats.userCounts).length === 1 ? 'user' : 'users'} • {uniqueApplicantCodes.length} total codes
+            </span>
           </div>
         </div>
 
@@ -726,7 +770,7 @@ export default function ReportsPage({ localTrackedJobs, currentUser, onBackToSea
         </div>
 
         {/* ─── Filter & Search Bar ─── */}
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-4 sm:p-5 space-y-4">
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-4 sm:p-5 space-y-4 print:hidden">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
             {/* Search Input */}
             <div className="relative lg:col-span-2">
@@ -1002,7 +1046,7 @@ export default function ReportsPage({ localTrackedJobs, currentUser, onBackToSea
                   </th>
 
                   {/* Action Link */}
-                  <th className="py-3 px-4 text-right whitespace-nowrap">Link</th>
+                  <th className="py-3 px-4 text-right whitespace-nowrap print:hidden">Link</th>
                 </tr>
               </thead>
 
@@ -1128,7 +1172,7 @@ export default function ReportsPage({ localTrackedJobs, currentUser, onBackToSea
                         </td>
 
                         {/* Link */}
-                        <td className="py-3 px-4 text-right whitespace-nowrap">
+                        <td className="py-3 px-4 text-right whitespace-nowrap print:hidden">
                           <a
                             href={job.url}
                             target="_blank"
@@ -1150,7 +1194,7 @@ export default function ReportsPage({ localTrackedJobs, currentUser, onBackToSea
 
           {/* Table Pagination Bar */}
           {totalPages > 1 && (
-            <div className="px-5 py-3.5 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500 bg-slate-50/50">
+            <div className="px-5 py-3.5 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500 bg-slate-50/50 print:hidden">
               <div>
                 Showing <strong>{((currentPage - 1) * pageSize) + 1}</strong> to <strong>{Math.min(currentPage * pageSize, sortedJobs.length)}</strong> of <strong>{sortedJobs.length}</strong> records
               </div>
