@@ -44,7 +44,36 @@ def create_session():
 
 session = create_session()
 
-def parse_job_article(article):
+# Helper to cache set of approved LMIA job IDs (refreshed every 10 mins)
+@cache.cached(timeout=600, key_prefix='approved_lmia_job_ids')
+def get_approved_lmia_job_ids():
+    ids = set()
+    try:
+        # Scan first few pages to capture all approved LMIA postings (~10 with fglo=1, ~94 Canada-wide)
+        for page in range(1, 5):
+            r = session.get(f"{BASE_URL}?fskl=101020&page={page}", timeout=8)
+            if r.status_code != 200:
+                break
+            soup = BeautifulSoup(r.text, 'html.parser')
+            articles = soup.find_all('article')
+            if not articles:
+                break
+            for a in articles:
+                jid = a.get("data-jobid") or (a.get("id") or "").replace("article-", "")
+                if jid:
+                    ids.add(jid)
+                source_li = a.select_one("li.source")
+                if source_li:
+                    m_jn = re.search(r'\b(\d{6,10})\b', source_li.get_text())
+                    if m_jn:
+                        ids.add(m_jn.group(1))
+            if len(articles) < 25:
+                break
+    except Exception as e:
+        print(f"Error fetching approved LMIA ids: {e}")
+    return list(ids)
+
+def parse_job_article(article, approved_ids=None, forced_lmia_status=None):
     """Parse a single job article tag into a dictionary safely with fallbacks."""
     try:
         # Job ID
@@ -107,7 +136,7 @@ def parse_job_article(article):
         if date_elem:
             date_posted = date_elem.get_text(strip=True)
 
-        # Extract flags (like New, On site, Direct Apply)
+        # Extract flags (like New, On site, Direct Apply, LMIA requested)
         flags = []
         flag_container = article.select_one(".flag")
         if flag_container:
@@ -141,6 +170,17 @@ def parse_job_article(article):
             if m_fallback:
                 job_number = m_fallback.group(1)
 
+        # Determine LMIA status
+        lmia_status = None
+        if forced_lmia_status:
+            lmia_status = forced_lmia_status
+        elif approved_ids and ((job_id and job_id in approved_ids) or (job_number and job_number in approved_ids)):
+            lmia_status = "approved"
+        elif article.select_one(".jobLMIAflag, .jobLMIAflag.submitted") or any("lmia requested" in f.lower() for f in flags):
+            lmia_status = "requested"
+        elif any("approved lmia" in f.lower() or "lmia approved" in f.lower() for f in flags):
+            lmia_status = "approved"
+
         # Validate that this is actually a job item
         if not url and not job_id:
             return None
@@ -156,7 +196,8 @@ def parse_job_article(article):
             "salary": salary,
             "datePosted": date_posted,
             "url": url,
-            "flags": flags
+            "flags": flags,
+            "lmiaStatus": lmia_status
         }
     except Exception as e:
         print(f"Error parsing article: {e}")
@@ -175,6 +216,7 @@ def get_jobs():
     province = request.args.get('province', '').strip().upper()
     international_only = request.args.get('international_only', 'false').lower() in ['true', '1', 'yes']
     remote_only = request.args.get('remote', 'false').lower() in ['true', '1', 'yes']
+    lmia = request.args.get('lmia', '').strip().lower()  # 'approved' | 'requested' | 'all'
 
     try:
         page_num = max(1, int(page))
@@ -198,9 +240,37 @@ def get_jobs():
     if province and province in valid_provinces:
         params["fprov"] = province
 
-    # Remote workplace filter
+    # LMIA filter:
+    # fskl=101020: Approved LMIA
+    # fskl=101010: LMIA requested
+    # fskl=101010&fskl=101020: Both requested & approved
+    # fskl=15141: Remote workplace
+    fskl_values = []
+    if lmia == 'approved':
+        fskl_values.append('101020')
+    elif lmia == 'requested':
+        fskl_values.append('101010')
+    elif lmia in ['all', 'true', '1']:
+        fskl_values.extend(['101010', '101020'])
+
     if remote_only:
-        params["fskl"] = "15141"
+        fskl_values.append('15141')
+
+    if len(fskl_values) == 1:
+        params["fskl"] = fskl_values[0]
+    elif len(fskl_values) > 1:
+        params["fskl"] = fskl_values
+
+    # Determine LMIA tagging strategy
+    forced_lmia = None
+    approved_ids = None
+    if lmia == 'approved':
+        forced_lmia = 'approved'
+    elif lmia == 'requested':
+        forced_lmia = 'requested'
+    else:
+        # Standard search or lmia='all': check against cached approved LMIA IDs
+        approved_ids = set(get_approved_lmia_job_ids())
 
     try:
         response = session.get(BASE_URL, params=params, timeout=15)
@@ -225,7 +295,7 @@ def get_jobs():
 
         for article in articles:
             if article:
-                job_data = parse_job_article(article)
+                job_data = parse_job_article(article, approved_ids=approved_ids, forced_lmia_status=forced_lmia)
                 if job_data:
                     jobs.append(job_data)
 
@@ -246,7 +316,8 @@ def get_jobs():
             "keyword": keywords,
             "province": province,
             "internationalOnly": international_only,
-            "remoteOnly": remote_only
+            "remoteOnly": remote_only,
+            "lmia": lmia
         })
 
     except requests.exceptions.RequestException as e:
@@ -419,24 +490,47 @@ def get_job_details():
 
         has_cover_letter = bool(re.search(r'cover\s*letter', html_content, re.I))
 
+        # Check LMIA details from cleaned DOM text (excluding JS templates)
+        lmia_notice = None
+        details_soup = BeautifulSoup(html_content, 'html.parser')
+        for tag in details_soup(['script', 'style']):
+            tag.decompose()
+        body_text_lower = details_soup.get_text().lower()
+
+        if "approved labour market impact assessment" in body_text_lower or "approved lmia" in body_text_lower:
+            lmia_notice = {
+                "type": "approved",
+                "badge": "Approved LMIA",
+                "text": "This employer has an approved Labour Market Impact Assessment (LMIA) to hire a foreign worker."
+            }
+        elif "lmia requested" in body_text_lower or "applied for a labour market impact assessment" in body_text_lower:
+            lmia_notice = {
+                "type": "requested",
+                "badge": "LMIA Requested",
+                "text": "This employer has applied for a Labour Market Impact Assessment (LMIA)."
+            }
+
         return jsonify({
             "applyInfo": info_string,
             "jobNumber": details_job_number,
-            "hasCoverLetter": has_cover_letter
+            "hasCoverLetter": has_cover_letter,
+            "lmiaNotice": lmia_notice
         })
 
     except requests.exceptions.Timeout:
         return jsonify({
             "applyInfo": "⏱ Job Bank took too long to respond. Click 'Apply' to visit the job page directly.",
             "jobNumber": None,
-            "hasCoverLetter": False
+            "hasCoverLetter": False,
+            "lmiaNotice": None
         })
     except Exception as e:
         print(f"Error fetching job details: {e}")
         return jsonify({
             "applyInfo": "Could not load contact info. Click 'Apply' to visit the job page.",
             "jobNumber": None,
-            "hasCoverLetter": False
+            "hasCoverLetter": False,
+            "lmiaNotice": None
         })
 
 
