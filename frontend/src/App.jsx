@@ -4,9 +4,9 @@ import {
   AlertCircle, CheckCircle, Download, ArrowDownUp, Phone, X, RefreshCw, 
   Briefcase, ChevronLeft, ChevronRight, Laptop, Sparkles, Check, Ban, Tag, 
   Edit3, CalendarDays, UserCheck, FileText, ArrowLeft, LogOut, User,
-  CloudUpload, Hash, Mail, BarChart3
+  CloudUpload, Hash, Mail, BarChart3, Clock, History
 } from 'lucide-react';
-import { supabase, fetchAllTrackedJobs } from './supabaseClient';
+import { supabase, fetchAllTrackedJobs, fetchAllJobApplications } from './supabaseClient';
 import ReportsPage from './ReportsPage';
 
 const CANADIAN_PROVINCES = [
@@ -80,6 +80,31 @@ function getDerivedStatus(job) {
   return '';
 }
 
+// Get current local time as "HH:mm" for timestamp inputs
+function getCurrentLocalTime() {
+  const now = new Date();
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  return `${hours}:${minutes}`;
+}
+
+// Format an application timestamp (e.g. "Sep 30, 05:30 AM")
+function formatAppTimestamp(timestamp) {
+  if (!timestamp) return '—';
+  try {
+    const d = new Date(timestamp);
+    if (isNaN(d.getTime())) return String(timestamp);
+    return d.toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  } catch {
+    return String(timestamp);
+  }
+}
+
 export default function App({ currentUser, onLogout }) {
   const [keyword, setKeyword] = useState('');
   const debouncedKeyword = useDebounce(keyword, 350);
@@ -126,10 +151,29 @@ export default function App({ currentUser, onLogout }) {
     }
   });
 
+  // Tracked individual job applications (Approach A: child table public.job_applications)
+  const [jobApplications, setJobApplications] = useState(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem('jobApplications'));
+      return Array.isArray(stored) ? stored : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const persistJobApplications = (apps) => {
+    try {
+      localStorage.setItem('jobApplications', JSON.stringify(apps));
+    } catch (err) {
+      console.warn('Failed to persist jobApplications to localStorage:', err);
+    }
+  };
+
   // Modal state for marking applied
   const [appliedModalJob, setAppliedModalJob] = useState(null);
   const [modalUserCode, setModalUserCode] = useState('');
   const [modalStatusDate, setModalStatusDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [modalStatusTime, setModalStatusTime] = useState(() => getCurrentLocalTime());
   const [previousModalDate, setPreviousModalDate] = useState('');
 
   // Date range & status filter for Export
@@ -239,14 +283,46 @@ export default function App({ currentUser, onLogout }) {
 
   const [syncedJobIds, setSyncedJobIds] = useState(() => new Set());
 
-  // On mount: fetch all tracked jobs from Supabase across all pages to stay in sync across all PCs
+  // On mount: fetch all tracked jobs & applications from Supabase across all pages to stay in sync across all PCs
   useEffect(() => {
     const fetchLatestFromCloud = async () => {
       try {
-        const data = await fetchAllTrackedJobs();
+        const [jobsData, appsData] = await Promise.all([
+          fetchAllTrackedJobs(),
+          fetchAllJobApplications()
+        ]);
 
-        if (data && data.length > 0) {
-          const cloudUnified = data.map(r => ({
+        if (appsData && appsData.length > 0) {
+          const appsMap = new Map();
+          appsData.forEach(app => {
+            const key = `${String(app.job_id)}_${String(app.applicant_code).toUpperCase()}`;
+            appsMap.set(key, app);
+          });
+
+          // Merge any unsynced local applications
+          const localStoredApps = (() => {
+            try {
+              const s = JSON.parse(localStorage.getItem('jobApplications'));
+              return Array.isArray(s) ? s : [];
+            } catch {
+              return [];
+            }
+          })();
+
+          localStoredApps.forEach(localApp => {
+            const key = `${String(localApp.job_id)}_${String(localApp.applicant_code).toUpperCase()}`;
+            if (!appsMap.has(key)) {
+              appsMap.set(key, localApp);
+            }
+          });
+
+          const unifiedApps = Array.from(appsMap.values());
+          setJobApplications(unifiedApps);
+          persistJobApplications(unifiedApps);
+        }
+
+        if (jobsData && jobsData.length > 0) {
+          const cloudUnified = jobsData.map(r => ({
             jobId: r.job_id,
             jobNumber: r.job_id,
             title: r.title || 'Untitled Job',
@@ -298,7 +374,7 @@ export default function App({ currentUser, onLogout }) {
           });
         }
       } catch (err) {
-        console.warn('Could not auto-fetch cloud tracked jobs on mount:', err);
+        console.warn('Could not auto-fetch cloud tracked data on mount:', err);
       }
     };
 
@@ -426,8 +502,10 @@ export default function App({ currentUser, onLogout }) {
   const openAppliedModal = (job) => {
     const existing = getTrackedJob(job.jobId);
     const todayStr = new Date().toISOString().split('T')[0];
+    const nowTimeStr = getCurrentLocalTime();
     setAppliedModalJob(job);
     setModalUserCode(existing?.userCode || '');
+    setModalStatusTime(nowTimeStr);
 
     const existingDate = existing?.statusDate || '';
     const hasExistingCodes = Boolean(existing?.userCode && existing.userCode.trim().length > 0);
@@ -448,16 +526,75 @@ export default function App({ currentUser, onLogout }) {
     setAppliedModalJob(null);
     setModalUserCode('');
     setPreviousModalDate('');
+    setModalStatusTime(getCurrentLocalTime());
   };
 
   const handleSaveAppliedModal = (e) => {
     if (e) e.preventDefault();
     if (!appliedModalJob) return;
 
-    markUnsynced(appliedModalJob.jobNumber || appliedModalJob.jobId);
+    const jId = String(appliedModalJob.jobNumber || appliedModalJob.jobId);
+    markUnsynced(jId);
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    const dateStr = modalStatusDate || todayStr;
+    const timeStr = modalStatusTime || getCurrentLocalTime();
+
+    let appliedAtIso;
+    try {
+      appliedAtIso = new Date(`${dateStr}T${timeStr}:00`).toISOString();
+    } catch {
+      appliedAtIso = new Date().toISOString();
+    }
+
+    const enteredCodes = parseApplicantCodes(modalUserCode);
+
+    // 1. Update jobApplications state and persist
+    setJobApplications(prev => {
+      const otherApps = (prev || []).filter(a => String(a.job_id) !== jId);
+      const currentJobApps = (prev || []).filter(a => String(a.job_id) === jId);
+      const appByCode = new Map();
+      currentJobApps.forEach(a => appByCode.set(String(a.applicant_code).toUpperCase(), a));
+
+      const updatedAppsForThisJob = [];
+      enteredCodes.forEach(code => {
+        const upper = code.toUpperCase();
+        if (appByCode.has(upper)) {
+          const old = appByCode.get(upper);
+          updatedAppsForThisJob.push({
+            ...old,
+            status_date: dateStr,
+            applied_at: appliedAtIso,
+            applied_by: (old.applied_by && old.applied_by !== 'Unknown') ? old.applied_by : (currentUser?.username || 'Unknown')
+          });
+          appByCode.delete(upper);
+        } else {
+          updatedAppsForThisJob.push({
+            job_id: jId,
+            applicant_code: upper,
+            applied_by: currentUser?.username || 'Unknown',
+            applied_at: appliedAtIso,
+            status_date: dateStr,
+            created_at: new Date().toISOString()
+          });
+        }
+      });
+
+      // Preserve any previous applicant submissions on this job
+      appByCode.forEach(remainingApp => {
+        updatedAppsForThisJob.push(remainingApp);
+      });
+
+      const nextApps = [...otherApps, ...updatedAppsForThisJob];
+      persistJobApplications(nextApps);
+      return nextApps;
+    });
+
+    // 2. Update trackedJobs state and persist
     setTrackedJobs(prev => {
       const existing = prev.find(j => j.jobId === appliedModalJob.jobId);
-      const todayStr = new Date().toISOString().split('T')[0];
+      const existingCodes = existing ? parseApplicantCodes(existing.userCode || existing.userCodes) : [];
+      const mergedCodes = Array.from(new Set([...existingCodes, ...enteredCodes]));
       let updated;
 
       if (existing) {
@@ -466,8 +603,9 @@ export default function App({ currentUser, onLogout }) {
           ...appliedModalJob,
           isApplied: true,
           isNotRequired: false, // can't be not-required and applied
-          userCode: modalUserCode.trim().toUpperCase(),
-          statusDate: modalStatusDate || todayStr,
+          userCode: mergedCodes.join(' '),
+          userCodes: mergedCodes,
+          statusDate: dateStr,
           updatedAt: new Date().toISOString()
         });
       } else {
@@ -477,8 +615,9 @@ export default function App({ currentUser, onLogout }) {
           isApplied: true,
           isChecked: false,
           isNotRequired: false,
-          userCode: modalUserCode.trim().toUpperCase(),
-          statusDate: modalStatusDate || todayStr,
+          userCode: mergedCodes.join(' '),
+          userCodes: mergedCodes,
+          statusDate: dateStr,
           updatedAt: new Date().toISOString()
         }];
       }
@@ -492,16 +631,27 @@ export default function App({ currentUser, onLogout }) {
 
   const handleRemoveAppliedFromModal = () => {
     if (!appliedModalJob) return;
-    markUnsynced(appliedModalJob.jobNumber || appliedModalJob.jobId);
+    const jId = String(appliedModalJob.jobNumber || appliedModalJob.jobId);
+    markUnsynced(jId);
+
+    // Remove from jobApplications
+    setJobApplications(prev => {
+      const nextApps = (prev || []).filter(a => String(a.job_id) !== jId);
+      persistJobApplications(nextApps);
+      return nextApps;
+    });
+
+    // Update trackedJobs
     setTrackedJobs(prev => {
       const existing = prev.find(j => j.jobId === appliedModalJob.jobId);
       let updated;
       if (existing && (existing.isChecked || existing.isNotRequired)) {
-        // Keep the job but remove Applied flag
+        // Keep the job but remove Applied flag and userCode
         updated = prev.map(j => j.jobId !== appliedModalJob.jobId ? j : {
           ...j,
           isApplied: false,
           userCode: '',
+          userCodes: [],
           updatedAt: new Date().toISOString()
         });
       } else {
@@ -806,12 +956,50 @@ export default function App({ currentUser, onLogout }) {
         }
       }
 
+      // 3b. Batch upsert job_applications records into Supabase using unique (job_id, applicant_code) conflict target
+      const appsToUpsert = [];
+      const appSeen = new Set();
+
+      (jobApplications || []).forEach(app => {
+        const jId = String(app.job_id || '');
+        const code = String(app.applicant_code || '').trim().toUpperCase();
+        if (!jId || !code) return;
+        const key = `${jId}_${code}`;
+        if (!appSeen.has(key)) {
+          appSeen.add(key);
+          appsToUpsert.push({
+            job_id: jId,
+            applicant_code: code,
+            applied_by: (app.applied_by && app.applied_by !== 'Unknown') ? app.applied_by : (currentUser?.username || 'Unknown'),
+            applied_at: app.applied_at || new Date().toISOString(),
+            status_date: app.status_date || (app.applied_at ? app.applied_at.split('T')[0] : new Date().toISOString().split('T')[0])
+          });
+        }
+      });
+
+      if (appsToUpsert.length > 0) {
+        const chunkSize = 50;
+        for (let i = 0; i < appsToUpsert.length; i += chunkSize) {
+          const chunk = appsToUpsert.slice(i, i + chunkSize);
+          const { error: appUpsertErr } = await supabase
+            .from('job_applications')
+            .upsert(chunk, { onConflict: 'job_id,applicant_code' });
+          if (appUpsertErr) {
+            console.warn('Upsert job_applications warning:', appUpsertErr.message);
+          }
+        }
+      }
+
       // 4. Clear local storage cache
       localStorage.removeItem('trackedJobs');
       localStorage.removeItem('appliedJobs');
+      localStorage.removeItem('jobApplications');
 
       // 5. Fetch fresh unified cloud records across all pages & update state
-      const freshData = await fetchAllTrackedJobs();
+      const [freshData, freshApps] = await Promise.all([
+        fetchAllTrackedJobs(),
+        fetchAllJobApplications()
+      ]);
 
       const unifiedJobs = (freshData || []).map(r => ({
         jobId: r.job_id,
@@ -833,10 +1021,11 @@ export default function App({ currentUser, onLogout }) {
         updatedAt: r.updated_at
       }));
 
-      setSyncedJobIds(new Set(freshData.map(r => String(r.job_id))));
+      setSyncedJobIds(new Set((freshData || []).map(r => String(r.job_id))));
       setTrackedJobs(unifiedJobs);
+      setJobApplications(freshApps || []);
       setUploadStatus('success');
-      setUploadMessage(`✅ Synced! All ${unifiedJobs.length} records verified in cloud. Local cache cleared.`);
+      setUploadMessage(`✅ Synced! All ${unifiedJobs.length} jobs and ${(freshApps || []).length} applications verified in cloud. Local cache cleared.`);
     } catch (err) {
       console.error('Sync error:', err);
       setUploadStatus('error');
@@ -888,6 +1077,7 @@ export default function App({ currentUser, onLogout }) {
     return (
       <ReportsPage
         localTrackedJobs={trackedJobs}
+        localJobApplications={jobApplications}
         currentUser={currentUser}
         onBackToSearch={() => setActiveView('search')}
       />
@@ -1916,6 +2106,47 @@ export default function App({ currentUser, onLogout }) {
               </button>
             </div>
 
+            {/* Previous Applications on this Job */}
+            {(() => {
+              const currentModalJobId = String(appliedModalJob.jobNumber || appliedModalJob.jobId);
+              const priorModalApps = (jobApplications || []).filter(a => String(a.job_id) === currentModalJobId);
+
+              if (priorModalApps.length === 0) return null;
+
+              return (
+                <div className="mt-3 bg-slate-50 border border-slate-200 rounded-xl p-3">
+                  <div className="text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <History className="w-3.5 h-3.5 text-blue-600" />
+                      <span>Recorded Submissions ({priorModalApps.length})</span>
+                    </span>
+                    <span className="text-[10px] text-slate-500 font-normal">History for Job #{currentModalJobId}</span>
+                  </div>
+                  <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                    {priorModalApps.map((app, idx) => (
+                      <div 
+                        key={app.id || `${app.job_id}_${app.applicant_code}_${idx}`} 
+                        className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs shadow-2xs"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-xs">
+                            {app.applicant_code}
+                          </span>
+                          <span className="text-slate-600 text-xs">
+                            by <strong className="text-slate-900 font-semibold">{app.applied_by || 'Unknown'}</strong>
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-slate-500 font-mono flex items-center gap-1 shrink-0">
+                          <Clock className="w-3 h-3 text-slate-400" />
+                          {formatAppTimestamp(app.applied_at || app.status_date)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
             <form onSubmit={handleSaveAppliedModal} className="mt-4 space-y-4">
               {/* Applicant Code Input */}
               <div>
@@ -1934,46 +2165,86 @@ export default function App({ currentUser, onLogout }) {
                   className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-900 placeholder-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 uppercase tracking-wider transition-all shadow-inner"
                 />
                 <p className="text-[11px] text-slate-500 mt-1.5 leading-normal">
-                  Enter one or more codes (e.g. <strong className="text-slate-800">CG102</strong> or <strong className="text-slate-800">CA596 CA3927</strong>). Separate multiple codes with a space or comma.
+                  Enter code(s) (e.g. <strong className="text-slate-800">CG102</strong>). Will be recorded under <strong className="text-blue-700">{currentUser?.username || 'You'}</strong> with exact date & time.
                 </p>
               </div>
 
-              {/* Status Date Input */}
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-                    <CalendarDays className="w-3.5 h-3.5 text-blue-600" />
-                    <span>Application Date</span>
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setModalStatusDate(new Date().toISOString().split('T')[0])}
-                    className="text-[11px] font-bold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded-md transition-colors"
-                  >
-                    Set to Today
-                  </button>
-                </div>
-                <input
-                  type="date"
-                  value={modalStatusDate}
-                  onChange={(e) => setModalStatusDate(e.target.value)}
-                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium text-slate-800 focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all cursor-pointer"
-                />
-                {previousModalDate && modalStatusDate !== previousModalDate && (
-                  <div className="mt-1.5 flex items-center justify-between text-[11px] bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-2.5 py-1">
-                    <span>
-                      ⚡ Auto-set to Today (Previous date was: <strong>{previousModalDate}</strong>)
-                    </span>
+              {/* Side-by-side Application Date & Time */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* Date Input */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                      <CalendarDays className="w-3.5 h-3.5 text-blue-600" />
+                      <span>Date</span>
+                    </label>
                     <button
                       type="button"
-                      onClick={() => setModalStatusDate(previousModalDate)}
-                      className="font-bold underline text-amber-900 hover:text-amber-950 ml-2"
+                      onClick={() => setModalStatusDate(new Date().toISOString().split('T')[0])}
+                      className="text-[10px] font-bold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded-md transition-colors"
                     >
-                      Revert
+                      Today
                     </button>
                   </div>
-                )}
+                  <input
+                    type="date"
+                    value={modalStatusDate}
+                    onChange={(e) => setModalStatusDate(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-medium text-slate-800 focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all cursor-pointer"
+                  />
+                </div>
+
+                {/* Time Input */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-blue-600" />
+                      <span>Time</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setModalStatusTime(getCurrentLocalTime())}
+                      className="text-[10px] font-bold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded-md transition-colors"
+                    >
+                      Now
+                    </button>
+                  </div>
+                  <input
+                    type="time"
+                    value={modalStatusTime}
+                    onChange={(e) => setModalStatusTime(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-medium text-slate-800 focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all cursor-pointer"
+                  />
+                </div>
               </div>
+
+              {/* Set Date & Time to Right Now */}
+              <button
+                type="button"
+                onClick={() => {
+                  setModalStatusDate(new Date().toISOString().split('T')[0]);
+                  setModalStatusTime(getCurrentLocalTime());
+                }}
+                className="w-full py-1.5 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 hover:text-slate-900 rounded-xl transition-colors flex items-center justify-center gap-1.5 border border-slate-200"
+              >
+                <Clock className="w-3.5 h-3.5 text-slate-500" />
+                <span>Set Date & Time to Right Now ({getCurrentLocalTime()})</span>
+              </button>
+
+              {previousModalDate && modalStatusDate !== previousModalDate && (
+                <div className="flex items-center justify-between text-[11px] bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-2.5 py-1">
+                  <span>
+                    ⚡ Auto-set to Today (Previous date was: <strong>{previousModalDate}</strong>)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setModalStatusDate(previousModalDate)}
+                    className="font-bold underline text-amber-900 hover:text-amber-950 ml-2"
+                  >
+                    Revert
+                  </button>
+                </div>
+              )}
 
               {/* Action Buttons */}
               <div className="pt-4 border-t border-slate-100 flex items-center justify-between gap-3">

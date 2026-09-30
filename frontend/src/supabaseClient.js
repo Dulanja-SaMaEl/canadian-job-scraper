@@ -38,3 +38,44 @@ export async function fetchAllTrackedJobs() {
 
   return allRows;
 }
+
+/**
+ * Paginates through all records in job_applications in chunks of 1,000.
+ * Safely returns an empty array if the table is not yet created.
+ */
+export async function fetchAllJobApplications() {
+  const allRows = [];
+  const pageSize = 1000;
+  let from = 0;
+  let hasMore = true;
+
+  try {
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from('job_applications')
+        .select('*')
+        .range(from, from + pageSize - 1)
+        .order('applied_at', { ascending: false });
+
+      if (error) {
+        // Table might not exist yet before migration
+        console.warn('job_applications query:', error.message);
+        break;
+      }
+      if (!data || data.length === 0) {
+        hasMore = false;
+      } else {
+        allRows.push(...data);
+        if (data.length < pageSize) {
+          hasMore = false;
+        } else {
+          from += pageSize;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('fetchAllJobApplications exception:', err);
+  }
+
+  return allRows;
+}

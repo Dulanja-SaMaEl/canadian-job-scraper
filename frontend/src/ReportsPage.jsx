@@ -3,9 +3,10 @@ import {
   BarChart3, PieChart, Users, CheckCircle2, Check, Ban, Calendar, 
   Download, Printer, RefreshCw, Search, ArrowUpDown, ArrowUp, ArrowDown, 
   Tag, ExternalLink, FileSpreadsheet, ChevronLeft, ChevronRight, X, 
-  Building2, MapPin, User, Cloud, HardDrive, ArrowLeft, Briefcase, Hash
+  Building2, MapPin, User, Cloud, HardDrive, ArrowLeft, Briefcase, Hash,
+  Clock, History
 } from 'lucide-react';
-import { supabase, fetchAllTrackedJobs } from './supabaseClient';
+import { supabase, fetchAllTrackedJobs, fetchAllJobApplications } from './supabaseClient';
 
 // Helper to parse applicant codes from any format: strings, arrays, slashes, commas, spaces
 function parseApplicantCodes(rawCode) {
@@ -27,10 +28,40 @@ function getJobStatusText(job) {
   return 'UNSPECIFIED';
 }
 
-export default function ReportsPage({ localTrackedJobs, currentUser, onBackToSearch }) {
+// Format an application timestamp (e.g. "Sep 30, 2026, 05:30 AM")
+function formatAppTimestamp(timestamp) {
+  if (!timestamp) return '—';
+  try {
+    const d = new Date(timestamp);
+    if (isNaN(d.getTime())) return String(timestamp);
+    return d.toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  } catch {
+    return String(timestamp);
+  }
+}
+
+// Format short time (e.g. "05:30 AM")
+function formatAppTime(timestamp) {
+  if (!timestamp) return '';
+  try {
+    const d = new Date(timestamp);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '';
+  }
+}
+
+export default function ReportsPage({ localTrackedJobs, localJobApplications, currentUser, onBackToSearch }) {
   // Data source: 'all' (cloud + unsynced local), 'cloud', 'local' (unsynced local only)
   const [dataSource, setDataSource] = useState('all');
   const [cloudJobs, setCloudJobs] = useState([]);
+  const [cloudApplications, setCloudApplications] = useState([]);
   const [loadingCloud, setLoadingCloud] = useState(false);
   const [cloudError, setCloudError] = useState(null);
 
@@ -58,9 +89,12 @@ export default function ReportsPage({ localTrackedJobs, currentUser, onBackToSea
     setLoadingCloud(true);
     setCloudError(null);
     try {
-      const data = await fetchAllTrackedJobs();
+      const [jobsData, appsData] = await Promise.all([
+        fetchAllTrackedJobs(),
+        fetchAllJobApplications()
+      ]);
 
-      const normalized = (data || []).map(row => {
+      const normalized = (jobsData || []).map(row => {
         const parsedCodes = parseApplicantCodes(row.user_codes);
         return {
           id: row.id,
@@ -85,6 +119,7 @@ export default function ReportsPage({ localTrackedJobs, currentUser, onBackToSea
       });
 
       setCloudJobs(normalized);
+      setCloudApplications(appsData || []);
     } catch (err) {
       console.error('Error loading cloud reports data:', err);
       setCloudError(err.message || 'Failed to fetch cloud records.');
@@ -96,6 +131,35 @@ export default function ReportsPage({ localTrackedJobs, currentUser, onBackToSea
   useEffect(() => {
     fetchCloudJobs();
   }, []);
+
+  // Combined applications dataset (cloud + local unsynced)
+  const allApplications = useMemo(() => {
+    const appsMap = new Map();
+    (cloudApplications || []).forEach(a => {
+      const key = `${String(a.job_id)}_${String(a.applicant_code).toUpperCase()}`;
+      appsMap.set(key, a);
+    });
+
+    (localJobApplications || []).forEach(a => {
+      const key = `${String(a.job_id)}_${String(a.applicant_code).toUpperCase()}`;
+      if (!appsMap.has(key)) {
+        appsMap.set(key, a);
+      }
+    });
+
+    return Array.from(appsMap.values());
+  }, [cloudApplications, localJobApplications]);
+
+  // Fast lookup map: jobId -> Array of application records
+  const applicationsByJobId = useMemo(() => {
+    const map = new Map();
+    allApplications.forEach(app => {
+      const jId = String(app.job_id);
+      if (!map.has(jId)) map.set(jId, []);
+      map.get(jId).push(app);
+    });
+    return map;
+  }, [allApplications]);
 
   // Compute truly unsynced local jobs (jobs in local state not yet in cloud)
   const unsyncedLocalJobs = useMemo(() => {
@@ -284,22 +348,31 @@ export default function ReportsPage({ localTrackedJobs, currentUser, onBackToSea
     if (sortedJobs.length === 0) return;
     const headers = [
       'Job Number', 'Job Title', 'Company', 'Location', 'Salary', 
-      'Date Posted', 'Status', 'Applicant Codes', 'Status Date', 'Saved By User', 'Job URL'
+      'Date Posted', 'Status', 'Applicant Codes', 'Status Date', 'Saved By User',
+      'Application Submissions History (Code - User - Time)', 'Job URL'
     ];
 
-    const rows = sortedJobs.map(job => [
-      `"${job.jobNumber || job.jobId || ''}"`,
-      `"${(job.title || '').replace(/"/g, '""')}"`,
-      `"${(job.company || '').replace(/"/g, '""')}"`,
-      `"${(job.location || '').replace(/"/g, '""')}"`,
-      `"${(job.salary || '').replace(/"/g, '""')}"`,
-      `"${(job.datePosted || '').replace(/"/g, '""')}"`,
-      `"${getJobStatusText(job)}"`,
-      `"${(job.userCode || (job.userCodes || []).join(' ')).replace(/"/g, '""')}"`,
-      `"${job.statusDate || ''}"`,
-      `"${(job.username || '').replace(/"/g, '""')}"`,
-      `"${job.url || ''}"`
-    ]);
+    const rows = sortedJobs.map(job => {
+      const apps = applicationsByJobId.get(String(job.jobNumber || job.jobId)) || [];
+      const historyStr = apps.length > 0
+        ? apps.map(a => `${a.applicant_code} (by ${a.applied_by || 'Unknown'} on ${formatAppTimestamp(a.applied_at || a.status_date)})`).join('; ')
+        : (job.userCode ? `${job.userCode} (by ${job.username || 'Unknown'} on ${job.statusDate || ''})` : 'None');
+
+      return [
+        `"${job.jobNumber || job.jobId || ''}"`,
+        `"${(job.title || '').replace(/"/g, '""')}"`,
+        `"${(job.company || '').replace(/"/g, '""')}"`,
+        `"${(job.location || '').replace(/"/g, '""')}"`,
+        `"${(job.salary || '').replace(/"/g, '""')}"`,
+        `"${(job.datePosted || '').replace(/"/g, '""')}"`,
+        `"${getJobStatusText(job)}"`,
+        `"${(job.userCode || (job.userCodes || []).join(' ')).replace(/"/g, '""')}"`,
+        `"${job.statusDate || ''}"`,
+        `"${(job.username || '').replace(/"/g, '""')}"`,
+        `"${historyStr.replace(/"/g, '""')}"`,
+        `"${job.url || ''}"`
+      ];
+    });
 
     const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(r => r.join(','))].join('\r\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -381,7 +454,7 @@ export default function ReportsPage({ localTrackedJobs, currentUser, onBackToSea
                   </h1>
                   <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-2xs">
                     <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                    <span>Live DB: {cloudJobs.length} records</span>
+                    <span>Live DB: {cloudJobs.length} jobs &bull; {cloudApplications.length} submissions</span>
                   </span>
                 </div>
                 <p className="text-xs text-slate-500">
@@ -1135,30 +1208,64 @@ export default function ReportsPage({ localTrackedJobs, currentUser, onBackToSea
                           </div>
                         </td>
 
-                        {/* Applicant Codes */}
-                        <td className="py-3 px-4 whitespace-nowrap">
+                        {/* Applicant Codes with Author & Time attribution */}
+                        <td className="py-3 px-4">
                           {job.userCodes && job.userCodes.length > 0 ? (
-                            <div className="flex flex-wrap items-center gap-1">
-                              {job.userCodes.map(code => (
-                                <button
-                                  key={code}
-                                  type="button"
-                                  onClick={() => setApplicantFilter(code)}
-                                  className="px-2 py-0.5 rounded text-[11px] font-mono font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors"
-                                  title={`Filter table by applicant ${code}`}
-                                >
-                                  {code}
-                                </button>
-                              ))}
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {job.userCodes.map(code => {
+                                const appsForJob = applicationsByJobId.get(String(job.jobNumber || job.jobId)) || [];
+                                const app = appsForJob.find(a => String(a.applicant_code).toUpperCase() === code.toUpperCase());
+                                const timeStr = app?.applied_at ? formatAppTime(app.applied_at) : '';
+
+                                return (
+                                  <div
+                                    key={code}
+                                    className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-mono bg-emerald-50 text-emerald-800 border border-emerald-200/90 shadow-2xs"
+                                    title={app ? `Applicant ${code} applied by ${app.applied_by || 'Unknown'} on ${formatAppTimestamp(app.applied_at || app.status_date)}` : `Filter table by ${code}`}
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() => setApplicantFilter(code)}
+                                      className="font-bold hover:underline hover:text-emerald-950 transition-colors"
+                                    >
+                                      {code}
+                                    </button>
+                                    {app?.applied_by && (
+                                      <span className="text-[10px] text-emerald-700 font-sans font-medium flex items-center gap-0.5 border-l border-emerald-200 pl-1">
+                                        <User className="w-2.5 h-2.5 text-emerald-600" />
+                                        <span>{app.applied_by}</span>
+                                      </span>
+                                    )}
+                                    {timeStr && (
+                                      <span className="text-[10px] text-slate-500 font-sans flex items-center gap-0.5 border-l border-emerald-200 pl-1">
+                                        <Clock className="w-2.5 h-2.5 text-slate-400" />
+                                        <span>{timeStr}</span>
+                                      </span>
+                                    )}
+                                  </div>
+                                );
+                              })}
                             </div>
                           ) : (
                             <span className="text-slate-400 italic text-[11px]">None</span>
                           )}
                         </td>
 
-                        {/* Date */}
-                        <td className="py-3 px-4 text-slate-600 whitespace-nowrap font-mono text-[11px]">
-                          {job.statusDate || '—'}
+                        {/* Date & Time */}
+                        <td className="py-3 px-4 whitespace-nowrap font-mono text-[11px]">
+                          <div className="font-semibold text-slate-700">{job.statusDate || '—'}</div>
+                          {(() => {
+                            const apps = applicationsByJobId.get(String(job.jobNumber || job.jobId)) || [];
+                            const latestApp = apps[0];
+                            const timeStr = latestApp?.applied_at ? formatAppTime(latestApp.applied_at) : '';
+                            if (!timeStr) return null;
+                            return (
+                              <div className="text-[10px] text-slate-400 font-sans flex items-center gap-1 mt-0.5">
+                                <Clock className="w-2.5 h-2.5" />
+                                <span>{timeStr}</span>
+                              </div>
+                            );
+                          })()}
                         </td>
 
                         {/* Saved By (Username) */}
