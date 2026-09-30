@@ -105,6 +105,45 @@ function formatAppTimestamp(timestamp) {
   }
 }
 
+// Format short time (e.g. "05:30 AM")
+function formatAppTime(timestamp) {
+  if (!timestamp) return '';
+  try {
+    const d = new Date(timestamp);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '';
+  }
+}
+
+// Group applications by author for clear, compact visualization on job cards
+function groupApplicationsByAuthor(applications, fallbackUser, fallbackCodes) {
+  if (applications && applications.length > 0) {
+    const groups = new Map();
+    applications.forEach(app => {
+      const author = app.applied_by || fallbackUser || 'Unknown';
+      const code = String(app.applicant_code || '').trim().toUpperCase();
+      if (!code) return;
+      if (!groups.has(author)) groups.set(author, []);
+      if (!groups.get(author).includes(code)) {
+        groups.get(author).push(code);
+      }
+    });
+
+    if (groups.size > 0) {
+      return Array.from(groups.entries()).map(([author, codes]) => ({ author, codes }));
+    }
+  }
+
+  const codes = parseApplicantCodes(fallbackCodes);
+  if (codes.length > 0) {
+    return [{ author: fallbackUser || 'Unknown', codes }];
+  }
+
+  return [];
+}
+
 export default function App({ currentUser, onLogout }) {
   const [keyword, setKeyword] = useState('');
   const debouncedKeyword = useDebounce(keyword, 350);
@@ -406,7 +445,48 @@ export default function App({ currentUser, onLogout }) {
     total: trackedJobs.length
   };
 
-  const getTrackedJob = (jobId) => trackedJobs.find(j => j.jobId === jobId);
+  const getTrackedJob = (jobOrId, maybeUrl, maybeJobNumber) => {
+    if (!jobOrId) return null;
+    let idStr = '';
+    let urlStr = '';
+    let numStr = '';
+
+    if (typeof jobOrId === 'object' && jobOrId !== null) {
+      idStr = String(jobOrId.jobId || jobOrId.jobNumber || '');
+      urlStr = jobOrId.url || '';
+      numStr = String(jobOrId.jobNumber || jobOrId.jobId || '');
+    } else {
+      idStr = String(jobOrId);
+      urlStr = maybeUrl || '';
+      numStr = String(maybeJobNumber || '');
+    }
+
+    const cleanUrl = urlStr ? urlStr.split(';')[0].split('?')[0] : '';
+
+    return trackedJobs.find(j => {
+      const jIdStr = String(j.jobId || '');
+      const jNumStr = String(j.jobNumber || '');
+      if (idStr && (jIdStr === idStr || jNumStr === idStr)) return true;
+      if (numStr && (jIdStr === numStr || jNumStr === numStr)) return true;
+      if (cleanUrl && j.url) {
+        const jClean = j.url.split(';')[0].split('?')[0];
+        if (jClean === cleanUrl) return true;
+      }
+      return false;
+    });
+  };
+
+  const getApplicationsForJob = (job, tracked) => {
+    const ids = new Set([
+      String(job?.jobId || ''),
+      String(job?.jobNumber || ''),
+      String(tracked?.jobId || ''),
+      String(tracked?.jobNumber || '')
+    ].filter(Boolean));
+
+    if (ids.size === 0) return [];
+    return jobApplications.filter(a => ids.has(String(a.job_id)));
+  };
 
   // ─────────────────────────────────────────────────────────────────────
   // PERSIST helper
@@ -1761,8 +1841,9 @@ export default function App({ currentUser, onLogout }) {
           ) : (
             /* Job Results List */
             (isApplicantViewActive ? currentApplicantJobs : jobs).map((job, idx) => {
-              const trackedJob = getTrackedJob(job.jobId) || job;
-              const jobIsApplied = trackedJob?.isApplied || false;
+              const trackedJob = getTrackedJob(job) || job;
+              const jobApps = getApplicationsForJob(job, trackedJob);
+              const jobIsApplied = Boolean(trackedJob?.isApplied || jobApps.length > 0);
               const jobIsChecked = trackedJob?.isChecked || false;
               const jobIsNotRequired = trackedJob?.isNotRequired || false;
               const jobContact = contactInfo[job.jobId];
@@ -1968,26 +2049,58 @@ export default function App({ currentUser, onLogout }) {
                           </div>
                         )}
 
-                        {/* If Applied: Display Applicant Code Pill */}
-                        {jobIsApplied && (
-                          <div className="flex items-center gap-1.5 text-xs text-slate-600 mt-0.5">
-                            <button
-                              type="button"
-                              onClick={() => openAppliedModal(job)}
-                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-800 hover:bg-emerald-100 font-mono text-xs font-bold transition-colors cursor-pointer"
-                              title="Click to edit applicant code or date"
-                            >
-                              <Tag className="w-3 h-3 text-emerald-600" />
-                              <span>Code: {trackedJob?.userCode || 'None'}</span>
-                              <Edit3 className="w-2.5 h-2.5 ml-0.5 text-emerald-600" />
-                            </button>
-                            {trackedJob?.statusDate && (
-                              <span className="text-[11px] text-slate-400 font-medium">
-                                ({trackedJob.statusDate})
-                              </span>
-                            )}
-                          </div>
-                        )}
+                        {/* If Applied: Display Applicant Code Pill with Who Applied Attribution */}
+                        {jobIsApplied && (() => {
+                          const groups = groupApplicationsByAuthor(
+                            jobApps, 
+                            trackedJob?.username || currentUser?.username, 
+                            trackedJob?.userCode || trackedJob?.userCodes
+                          );
+                          const statusDateStr = trackedJob?.statusDate || (jobApps[0]?.status_date || '');
+
+                          const tooltipText = jobApps.length > 0
+                            ? jobApps.map(a => `${a.applicant_code} applied by ${a.applied_by || 'Unknown'} on ${formatAppTimestamp(a.applied_at || a.status_date)}`).join('; ')
+                            : `Applied by ${trackedJob?.username || 'Unknown'}${statusDateStr ? ` (${statusDateStr})` : ''}. Click to view/edit.`;
+
+                          return (
+                            <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-600 mt-1 lg:justify-end">
+                              <button
+                                type="button"
+                                onClick={() => openAppliedModal(job)}
+                                className="inline-flex flex-wrap items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100/90 border border-emerald-200 text-emerald-900 font-mono text-xs font-bold transition-all shadow-2xs cursor-pointer group"
+                                title={tooltipText}
+                              >
+                                <Tag className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                <span className="text-emerald-800 font-sans font-semibold text-[11px]">Code:</span>
+
+                                {groups.length === 0 ? (
+                                  <span className="text-slate-400 italic font-sans font-normal text-xs">None</span>
+                                ) : (
+                                  groups.map((g, gIdx) => (
+                                    <span key={g.author} className="inline-flex items-center gap-1">
+                                      {gIdx > 0 && <span className="text-emerald-300 font-normal mx-0.5">•</span>}
+                                      <span className="font-bold text-emerald-950 tracking-wide">
+                                        {g.codes.join(' ')}
+                                      </span>
+                                      <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-md bg-emerald-100/90 text-emerald-800 text-[10px] font-sans font-semibold border border-emerald-200/70">
+                                        <User className="w-2.5 h-2.5 text-emerald-600" />
+                                        <span>{g.author}</span>
+                                      </span>
+                                    </span>
+                                  ))
+                                )}
+
+                                <Edit3 className="w-3 h-3 text-emerald-600 ml-0.5 group-hover:scale-110 transition-transform" />
+                              </button>
+
+                              {statusDateStr && (
+                                <span className="text-[11px] text-slate-400 font-medium">
+                                  ({statusDateStr})
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                   </div>
