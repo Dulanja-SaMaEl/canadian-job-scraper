@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { AlertTriangle, Lock, Clock } from 'lucide-react';
 
+export const CLIENT_VERSION = '2026.11.20.v2';
+
 // Fixed global shutdown deadline: 24 hours from deployment (2026-11-21T11:55:00+05:30)
 // Using a fixed timestamp ensures refreshing the browser or switching PCs never resets the countdown.
 const SHUTDOWN_DEADLINE_MS = new Date('2026-11-21T11:55:00+05:30').getTime();
@@ -34,6 +36,30 @@ export default function ShutdownBanner() {
       setTimeLeft(computeTimeLeft());
     }, 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  // 30-second Auto-Reload Heartbeat:
+  // If the backend version ever changes (e.g. when shutting down tomorrow or pushing a policy change),
+  // every open browser tab automatically reloads itself within 30 seconds without user action.
+  useEffect(() => {
+    const checkVersionHeartbeat = async () => {
+      try {
+        const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+        const res = await fetch(`${apiUrl}/health?t=${Date.now()}`, { cache: 'no-store' });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.version && data.version !== CLIENT_VERSION) {
+            window.location.reload();
+          }
+        }
+      } catch {
+        // Ignore transient network errors
+      }
+    };
+
+    checkVersionHeartbeat();
+    const interval = setInterval(checkVersionHeartbeat, 30000);
+    return () => clearInterval(interval);
   }, []);
 
   // Global security lockdown: block Ctrl+P (Print to PDF) and Ctrl+S (Save Webpage)

@@ -9,7 +9,7 @@ import {
 import { supabase, fetchAllTrackedJobs, fetchAllJobApplications } from './supabaseClient';
 import ReportsPage from './ReportsPage';
 import LmiaPage from './LmiaPage';
-import ShutdownBanner from './ShutdownBanner';
+import ShutdownBanner, { CLIENT_VERSION } from './ShutdownBanner';
 
 const CANADIAN_PROVINCES = [
   { code: '', label: 'All Canada' },
@@ -282,6 +282,7 @@ export default function App({ currentUser, onLogout }) {
         sort: sort,
         international_only: internationalOnly ? 'true' : 'false',
         remote: remoteOnly ? 'true' : 'false',
+        v: CLIENT_VERSION,
       });
       if (province) {
         params.append('province', province);
@@ -807,7 +808,7 @@ export default function App({ currentUser, onLogout }) {
     setContactInfo(prev => ({ ...prev, [jobId]: { loading: true } }));
     try {
       const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
-      const response = await fetch(`${apiUrl}/job-details?url=${encodeURIComponent(jobUrl)}`);
+      const response = await fetch(`${apiUrl}/job-details?url=${encodeURIComponent(jobUrl)}&v=${encodeURIComponent(CLIENT_VERSION)}`);
       const data = await response.json();
       setContactInfo(prev => ({
         ...prev,
@@ -816,6 +817,7 @@ export default function App({ currentUser, onLogout }) {
           data: data.applyInfo,
           jobNumber: data.jobNumber,
           hasCoverLetter: data.hasCoverLetter,
+          lmiaNotice: data.lmiaNotice,
         }
       }));
 

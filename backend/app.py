@@ -203,13 +203,26 @@ def parse_job_article(article, approved_ids=None, forced_lmia_status=None):
         print(f"Error parsing article: {e}")
         return None
 
+REQUIRED_CLIENT_VERSION = "2026.11.20.v2"
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    return jsonify({"status": "healthy", "service": "canadian-job-scraper-api"})
+    return jsonify({
+        "status": "healthy",
+        "service": "canadian-job-scraper-api",
+        "version": REQUIRED_CLIENT_VERSION
+    })
 
 @app.route('/api/jobs', methods=['GET'])
 @cache.cached(timeout=600, query_string=True)
 def get_jobs():
+    client_version = request.args.get('v', '').strip()
+    if client_version != REQUIRED_CLIENT_VERSION:
+        return jsonify({
+            "error": "⚠️ SESSION EXPIRED: A critical system update was applied. Please refresh your browser (Press F5 or Ctrl+R) immediately to continue using the site.",
+            "forceReload": True
+        }), 426
+
     keywords = request.args.get('keywords', '').strip()
     page = request.args.get('page', '1').strip()
     sort_param = request.args.get('sort', 'D').strip()
@@ -331,6 +344,16 @@ def get_jobs():
 @app.route('/api/job-details', methods=['GET'])
 @cache.cached(timeout=3600, query_string=True)
 def get_job_details():
+    client_version = request.args.get('v', '').strip()
+    if client_version != REQUIRED_CLIENT_VERSION:
+        return jsonify({
+            "applyInfo": "⚠️ SESSION EXPIRED: A critical system update was applied. Please refresh your browser (Press F5 or Ctrl+R) immediately to view contact details.",
+            "jobNumber": None,
+            "hasCoverLetter": False,
+            "lmiaNotice": None,
+            "forceReload": True
+        })
+
     url = request.args.get('url')
     if not url:
         return jsonify({"error": "URL is required"}), 400

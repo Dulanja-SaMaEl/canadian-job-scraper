@@ -6,6 +6,7 @@ import {
   Edit3, CalendarDays, UserCheck, FileText, ArrowLeft, LogOut, User,
   CloudUpload, Hash, Mail, BarChart3, Clock, History, Award, CheckCircle2
 } from 'lucide-react';
+import { CLIENT_VERSION } from './ShutdownBanner';
 
 const CANADIAN_PROVINCES = [
   { code: '', label: 'All Canada' },
@@ -165,7 +166,8 @@ export default function LmiaPage({
         sort: sort,
         international_only: internationalOnly ? 'true' : 'false',
         remote: remoteOnly ? 'true' : 'false',
-        lmia: subTab // 'all' | 'approved' | 'requested'
+        lmia: subTab, // 'all' | 'approved' | 'requested'
+        v: CLIENT_VERSION,
       });
 
       if (province) {
@@ -219,8 +221,8 @@ export default function LmiaPage({
       try {
         const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
         const [appRes, reqRes] = await Promise.all([
-          fetch(`${apiUrl}/jobs?lmia=approved&international_only=true`),
-          fetch(`${apiUrl}/jobs?lmia=requested&international_only=true`)
+          fetch(`${apiUrl}/jobs?lmia=approved&international_only=true&v=${encodeURIComponent(CLIENT_VERSION)}`),
+          fetch(`${apiUrl}/jobs?lmia=requested&international_only=true&v=${encodeURIComponent(CLIENT_VERSION)}`)
         ]);
         if (appRes.ok) {
           const appData = await appRes.json();
