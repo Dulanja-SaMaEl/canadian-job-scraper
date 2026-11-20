@@ -203,7 +203,7 @@ def parse_job_article(article, approved_ids=None, forced_lmia_status=None):
         print(f"Error parsing article: {e}")
         return None
 
-REQUIRED_CLIENT_VERSION = "2026.11.20.v2"
+REQUIRED_CLIENT_VERSION = "2026.11.20.v3"
 
 @app.before_request
 def enforce_client_version():

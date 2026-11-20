@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { AlertTriangle, Lock, Clock, RefreshCw } from 'lucide-react';
 
-export const CLIENT_VERSION = '2026.11.20.v2';
+export const CLIENT_VERSION = '2026.11.20.v3';
 
 // Fixed global shutdown deadline: 24 hours from deployment (2026-11-21T11:55:00+05:30)
 // Using a fixed timestamp ensures refreshing the browser or switching PCs never resets the countdown.
@@ -165,7 +165,7 @@ export default function ShutdownBanner() {
         </div>
       )}
 
-      <div className="bg-gradient-to-r from-red-700 via-red-600 to-rose-700 text-white px-4 py-2.5 shadow-md border-b border-red-800 relative z-50 select-none">
+      <div className="bg-gradient-to-r from-red-700 via-red-600 to-rose-700 text-white px-4 py-2.5 shadow-md border-b border-red-800 sticky top-0 z-50 select-none">
         <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 text-xs sm:text-sm">
           <div className="flex items-center gap-2.5 text-center sm:text-left">
             <span className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-white/15 text-amber-300 shrink-0 animate-pulse">
