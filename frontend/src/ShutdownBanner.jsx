@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { AlertTriangle, Lock, Clock } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { AlertTriangle, Lock, Clock, RefreshCw } from 'lucide-react';
 
 export const CLIENT_VERSION = '2026.11.20.v2';
 
@@ -28,8 +28,29 @@ function computeTimeLeft() {
   };
 }
 
+// Extract the active Vite JS bundle path from the current DOM
+function getCurrentScriptSrc() {
+  try {
+    const scripts = document.querySelectorAll('script[src*="/assets/index-"]');
+    if (scripts.length > 0) {
+      const src = scripts[0].getAttribute('src') || '';
+      const match = src.match(/\/assets\/index-[^"'\s?]+\.js/);
+      return match ? match[0] : null;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
 export default function ShutdownBanner() {
   const [timeLeft, setTimeLeft] = useState(() => computeTimeLeft());
+  const [updateDetected, setUpdateDetected] = useState(false);
+  const initialBundleRef = useRef(null);
+
+  useEffect(() => {
+    initialBundleRef.current = getCurrentScriptSrc();
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -38,18 +59,40 @@ export default function ShutdownBanner() {
     return () => clearInterval(timer);
   }, []);
 
-  // 30-second Auto-Reload Heartbeat:
-  // If the backend version ever changes (e.g. when shutting down tomorrow or pushing a policy change),
-  // every open browser tab automatically reloads itself within 30 seconds without user action.
+  // 15-second Live Deployment & Backend Version Watcher:
+  // Checks BOTH:
+  // 1. Vercel's /index.html bundle hash (detects ANY Vercel redeploy automatically)
+  // 2. Render's /api/health version string
+  // When either changes, displays a mandatory refresh notice and reloads automatically.
   useEffect(() => {
-    const checkVersionHeartbeat = async () => {
+    const checkDeploymentUpdate = async () => {
       try {
+        // 1. Check Vercel index.html for a new JS bundle hash
+        const currentBundle = initialBundleRef.current || getCurrentScriptSrc();
+        if (currentBundle) {
+          const htmlRes = await fetch(`/?_t=${Date.now()}`, {
+            cache: 'no-store',
+            headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+          });
+          if (htmlRes.ok) {
+            const htmlText = await htmlRes.text();
+            const match = htmlText.match(/\/assets\/index-[^"'\s?]+\.js/);
+            if (match && match[0] && match[0] !== currentBundle) {
+              setUpdateDetected(true);
+              setTimeout(() => window.location.reload(), 2500);
+              return;
+            }
+          }
+        }
+
+        // 2. Check Backend /api/health version
         const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
         const res = await fetch(`${apiUrl}/health?t=${Date.now()}`, { cache: 'no-store' });
         if (res.ok) {
           const data = await res.json();
           if (data.version && data.version !== CLIENT_VERSION) {
-            window.location.reload();
+            setUpdateDetected(true);
+            setTimeout(() => window.location.reload(), 2500);
           }
         }
       } catch {
@@ -57,8 +100,8 @@ export default function ShutdownBanner() {
       }
     };
 
-    checkVersionHeartbeat();
-    const interval = setInterval(checkVersionHeartbeat, 30000);
+    checkDeploymentUpdate();
+    const interval = setInterval(checkDeploymentUpdate, 15000);
     return () => clearInterval(interval);
   }, []);
 
@@ -97,6 +140,30 @@ export default function ShutdownBanner() {
           }
         }
       `}</style>
+
+      {/* Full-Screen Mandatory Refresh Modal when a new deployment is detected */}
+      {updateDetected && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 select-none">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border-2 border-red-500 text-center space-y-4">
+            <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-red-100 text-red-600 mx-auto">
+              <RefreshCw className="w-7 h-7 animate-spin" />
+            </div>
+            <h3 className="text-lg font-extrabold text-slate-900">
+              System Update Applied
+            </h3>
+            <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+              A new security update has been deployed by the Administrator. Please refresh your browser to continue using the site.
+            </p>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="w-full py-2.5 px-4 bg-red-600 hover:bg-red-700 text-white font-bold text-sm rounded-xl shadow-md transition-all cursor-pointer"
+            >
+              Refresh Now ( Auto-reloading... )
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="bg-gradient-to-r from-red-700 via-red-600 to-rose-700 text-white px-4 py-2.5 shadow-md border-b border-red-800 relative z-50 select-none">
         <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 text-xs sm:text-sm">
