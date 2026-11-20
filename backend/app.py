@@ -205,6 +205,36 @@ def parse_job_article(article, approved_ids=None, forced_lmia_status=None):
 
 REQUIRED_CLIENT_VERSION = "2026.11.20.v2"
 
+@app.before_request
+def enforce_client_version():
+    # Allow CORS preflight OPTIONS and health check
+    if request.method == 'OPTIONS' or request.path == '/api/health':
+        return None
+
+    if request.path in ['/api/jobs', '/api/job-details']:
+        client_version = request.args.get('v', '').strip()
+        if client_version != REQUIRED_CLIENT_VERSION:
+            if request.path == '/api/job-details':
+                return jsonify({
+                    "applyInfo": "⚠️ SESSION EXPIRED: A critical system update was applied. Please refresh your browser (Press F5 or Ctrl+R) immediately to view contact details.",
+                    "jobNumber": None,
+                    "hasCoverLetter": False,
+                    "lmiaNotice": None,
+                    "forceReload": True
+                }), 200
+            return jsonify({
+                "error": "⚠️ SESSION EXPIRED: A critical system update was applied. Please refresh your browser (Press F5 or Ctrl+R) immediately to continue using the site.",
+                "forceReload": True
+            }), 426
+    return None
+
+@app.after_request
+def add_no_cache_headers(response):
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     return jsonify({
@@ -216,13 +246,6 @@ def health_check():
 @app.route('/api/jobs', methods=['GET'])
 @cache.cached(timeout=600, query_string=True)
 def get_jobs():
-    client_version = request.args.get('v', '').strip()
-    if client_version != REQUIRED_CLIENT_VERSION:
-        return jsonify({
-            "error": "⚠️ SESSION EXPIRED: A critical system update was applied. Please refresh your browser (Press F5 or Ctrl+R) immediately to continue using the site.",
-            "forceReload": True
-        }), 426
-
     keywords = request.args.get('keywords', '').strip()
     page = request.args.get('page', '1').strip()
     sort_param = request.args.get('sort', 'D').strip()
