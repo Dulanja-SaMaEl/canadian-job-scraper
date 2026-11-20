@@ -5,8 +5,10 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIU
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   global: {
-    headers: {
-      'x-client-info': 'canadian-job-scraper/2026.11.20.v2'
+    fetch: (url, options = {}) => {
+      const headers = new Headers(options.headers);
+      headers.set('x-client-info', 'canadian-job-scraper/2026.11.20.v2');
+      return fetch(url, { ...options, headers });
     }
   }
 });
