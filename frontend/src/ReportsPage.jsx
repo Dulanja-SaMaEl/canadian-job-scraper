@@ -4,7 +4,7 @@ import {
   Download, Printer, RefreshCw, Search, ArrowUpDown, ArrowUp, ArrowDown, 
   Tag, ExternalLink, FileSpreadsheet, ChevronLeft, ChevronRight, X, 
   Building2, MapPin, User, Cloud, HardDrive, ArrowLeft, Briefcase, Hash,
-  Clock, History
+  Clock, History, Lock
 } from 'lucide-react';
 import { supabase, fetchAllTrackedJobs, fetchAllJobApplications } from './supabaseClient';
 
@@ -343,46 +343,10 @@ export default function ReportsPage({ localTrackedJobs, localJobApplications, cu
     return { total, applied, checked, notRequired, both, applicantCounts, userCounts, dateCounts };
   }, [filteredJobs]);
 
-  // Export to CSV with Excel UTF-8 BOM
+  // Export to CSV (Locked by Administrator)
   const handleExportCsv = () => {
-    if (sortedJobs.length === 0) return;
-    const headers = [
-      'Job Number', 'Job Title', 'Company', 'Location', 'Salary', 
-      'Date Posted', 'Status', 'Applicant Codes', 'Status Date', 'Saved By User',
-      'Application Submissions History (Code - User - Time)', 'Job URL'
-    ];
-
-    const rows = sortedJobs.map(job => {
-      const apps = applicationsByJobId.get(String(job.jobNumber || job.jobId)) || [];
-      const historyStr = apps.length > 0
-        ? apps.map(a => `${a.applicant_code} (by ${a.applied_by || 'Unknown'} on ${formatAppTimestamp(a.applied_at || a.status_date)})`).join('; ')
-        : (job.userCode ? `${job.userCode} (by ${job.username || 'Unknown'} on ${job.statusDate || ''})` : 'None');
-
-      return [
-        `"${job.jobNumber || job.jobId || ''}"`,
-        `"${(job.title || '').replace(/"/g, '""')}"`,
-        `"${(job.company || '').replace(/"/g, '""')}"`,
-        `"${(job.location || '').replace(/"/g, '""')}"`,
-        `"${(job.salary || '').replace(/"/g, '""')}"`,
-        `"${(job.datePosted || '').replace(/"/g, '""')}"`,
-        `"${getJobStatusText(job)}"`,
-        `"${(job.userCode || (job.userCodes || []).join(' ')).replace(/"/g, '""')}"`,
-        `"${job.statusDate || ''}"`,
-        `"${(job.username || '').replace(/"/g, '""')}"`,
-        `"${historyStr.replace(/"/g, '""')}"`,
-        `"${job.url || ''}"`
-      ];
-    });
-
-    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(r => r.join(','))].join('\r\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    const timeTag = new Date().toISOString().split('T')[0];
-    link.download = `canadian_job_report_${timeTag}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
+    // Hard security lock: CSV/Excel export & backup functionality is completely disabled
+    return;
   };
 
   // Quick Preset Date Ranges
@@ -519,27 +483,26 @@ export default function ReportsPage({ localTrackedJobs, localJobApplications, cu
                 <span className="hidden sm:inline">Refresh</span>
               </button>
 
-              {/* Export CSV */}
+              {/* Export CSV (Locked) */}
               <button
                 type="button"
-                onClick={handleExportCsv}
-                disabled={sortedJobs.length === 0}
-                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white text-xs font-bold rounded-xl shadow-xs transition-all disabled:opacity-40"
-                title="Export filtered records to CSV"
+                disabled={true}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-slate-200 text-slate-400 text-xs font-bold rounded-xl border border-slate-300 opacity-60 cursor-not-allowed select-none"
+                title="Export & Backup functions are disabled by Administrator"
               >
-                <FileSpreadsheet className="w-3.5 h-3.5" />
-                <span>Export CSV ({sortedJobs.length})</span>
+                <Lock className="w-3.5 h-3.5" />
+                <span>Export Locked</span>
               </button>
 
-              {/* Print Report */}
+              {/* Print Report (Locked) */}
               <button
                 type="button"
-                onClick={() => window.print()}
-                className="inline-flex items-center gap-1 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold rounded-xl shadow-2xs transition-all"
-                title="Print or save as PDF"
+                disabled={true}
+                className="inline-flex items-center gap-1 px-3 py-1.5 bg-slate-200 text-slate-400 text-xs font-semibold rounded-xl border border-slate-300 opacity-60 cursor-not-allowed select-none"
+                title="Printing & PDF saving are disabled by Administrator"
               >
-                <Printer className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Print</span>
+                <Lock className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Print Locked</span>
               </button>
             </div>
           </div>
@@ -1009,7 +972,11 @@ export default function ReportsPage({ localTrackedJobs, localJobApplications, cu
             </div>
           </div>
 
-          <div className="overflow-x-auto">
+          <div
+            className="overflow-x-auto select-none"
+            onCopy={(e) => e.preventDefault()}
+            onCut={(e) => e.preventDefault()}
+          >
             <table className="w-full text-left text-xs border-collapse">
               <thead>
                 <tr className="bg-slate-100/75 border-b border-slate-200 text-slate-600 uppercase tracking-wider font-bold">

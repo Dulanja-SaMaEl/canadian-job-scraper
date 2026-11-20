@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { supabase } from './supabaseClient';
 import bcrypt from 'bcryptjs';
 import { Briefcase, User, Lock, Eye, EyeOff, AlertCircle, Loader2 } from 'lucide-react';
+import ShutdownBanner from './ShutdownBanner';
 
 export default function LoginPage({ onLogin, onGoToRegister }) {
   const [username, setUsername] = useState('');
@@ -57,8 +58,10 @@ export default function LoginPage({ onLogin, onGoToRegister }) {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-blue-950 to-indigo-950 px-4 py-12">
-      <div className="w-full max-w-sm">
+    <div className="min-h-screen flex flex-col bg-gradient-to-br from-slate-900 via-blue-950 to-indigo-950">
+      <ShutdownBanner />
+      <div className="flex-1 flex items-center justify-center px-4 py-12">
+        <div className="w-full max-w-sm">
         {/* Logo */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-500 shadow-xl shadow-blue-900/40 mb-4">
@@ -160,6 +163,7 @@ export default function LoginPage({ onLogin, onGoToRegister }) {
             </p>
           </div>
         </div>
+      </div>
       </div>
     </div>
   );
